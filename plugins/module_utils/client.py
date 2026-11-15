@@ -22,6 +22,7 @@ from ansible.module_utils.urls import Request
 LOGIN_PAGE_MARKER = "Login - Residential Gateway"
 ERROR_PREFIX = "#ERROR_"
 EXCERPT_LENGTH = 80
+SESSION_COOKIE = "Authorization"
 
 EXOS_ARGUMENT_SPEC = dict(
     host=dict(type="str", required=True),
@@ -130,6 +131,16 @@ class ExosClient:
                 % (self.host, self.username, err.code, json.dumps(status, sort_keys=True)),
                 access_status=status,
             ) from None
+        # A login the router did not accept can still be answered with HTTP 200. The session
+        # cookie is what shows it worked.
+        cookies = getattr(self._request, "cookies", None)
+        if cookies is not None and not any(getattr(c, "name", None) == SESSION_COOKIE for c in cookies):
+            status = self._access_status()
+            raise ExosAuthError(
+                "login to %s as %s was not accepted (no session cookie was set, not retried); "
+                "router access status: %s" % (self.host, self.username, json.dumps(status, sort_keys=True)),
+                access_status=status,
+            )
 
     def _access_status(self):
         try:

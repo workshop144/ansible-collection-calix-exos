@@ -23,6 +23,11 @@ class FakeResponse:
         return self._body.encode("utf-8")
 
 
+class FakeCookie:
+    def __init__(self, name):
+        self.name = name
+
+
 class FakeRouter:
     """Implements login, logout, the reservation table and canned replies.
 
@@ -37,6 +42,8 @@ class FakeRouter:
         self.calls = []
         self.logged_in = False
         self.drop_writes = False
+        self.refuse_silently = False  # answer a wrong password with HTTP 200 and no cookie
+        self.cookies = []
         self._nonce_count = 0
         self._nonce = None
         self._failures = {}
@@ -83,12 +90,16 @@ class FakeRouter:
             ).hexdigest()
             if params.get("Username") == self.username and params.get("auth") == expected and params.get("nonce") == self._nonce:
                 self.logged_in = True
+                self.cookies.append(FakeCookie("Authorization"))
+                return ""
+            if self.refuse_silently:
                 return ""
             raise HTTPError(url, 401, "Unauthorized", {}, None)
         if endpoint == "get_access_status.cmd":
             return json.dumps(ACCESS_STATUS)
         if endpoint == "logout.cgi":
             self.logged_in = False
+            del self.cookies[:]
             return ""
         if not self.logged_in:
             return LOGIN_PAGE

@@ -171,3 +171,13 @@ def test_refused_login_message_carries_http_status():
     with pytest.raises(ExosAuthError) as err:
         ExosClient(HOST, "admin", "wrong", request=router).login()
     assert "HTTP 401" in str(err.value)
+
+
+def test_login_answered_200_without_a_session_cookie_is_a_refusal():
+    router = FakeRouter(password="right")
+    router.refuse_silently = True
+    with pytest.raises(ExosAuthError) as err:
+        ExosClient(HOST, "admin", "wrong", request=router).login()
+    assert router.endpoints().count("login.cgi") == 1
+    assert "no session cookie" in str(err.value)
+    assert "wrong" not in str(err.value)
