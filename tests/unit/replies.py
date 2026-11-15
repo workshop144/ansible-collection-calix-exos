@@ -77,7 +77,7 @@ SSID_PRIMARY = [
     dict(SSID_ROW, wlRadioIdx=3, wlBand="6", wlSsid="reserved-6g", wlAuthMode="wpa3"),
 ]
 
-SECURITY_PARAMS = {"enblUpnp": "0", "enblUpnpnat": "0", "fwLevel": "High", "fwStealthMode": "1", "dmzHost": ""}
+SECURITY_PARAMS = {"enblUpnp": "0", "enblUpnpnat": "0", "fwLevel": "High", "fwStealthMode": "1", "dmzHost": "0|"}
 
 CONNECTION = {"connection": {"wan": {"state": 2, "color": "green"}, "ipv4": {"state": 2, "color": "green"},
                              "ipv6": {"state": 2, "color": "green"}}, "gateway": []}

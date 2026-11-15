@@ -137,3 +137,19 @@ def test_reservation_table_without_lease_key_is_empty():
 def test_reservation_table_returns_entries_and_pools():
     entries, pools = normalize.reservation_table(replies.RESERVATIONS)
     assert len(entries) == 3 and pools == ["lan"]
+
+
+def test_security_dmz_off_as_the_router_reports_it():
+    # A real router with no DMZ host answers dmzHost with "0|".
+    out = normalize.security(dict(replies.SECURITY_PARAMS, dmzHost="0|"), None, None)
+    assert out["dmz_host"] is None
+
+
+def test_security_dmz_on_keeps_the_host():
+    out = normalize.security(dict(replies.SECURITY_PARAMS, dmzHost="1|192.0.2.50"), None, None)
+    assert out["dmz_host"] == "192.0.2.50"
+
+
+def test_security_dmz_unrecognised_value_is_kept_as_is():
+    out = normalize.security(dict(replies.SECURITY_PARAMS, dmzHost="1|"), None, None)
+    assert out["dmz_host"] == "1|"

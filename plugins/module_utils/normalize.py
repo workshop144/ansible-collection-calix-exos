@@ -167,6 +167,17 @@ def wifi(status, ssids):
     return out
 
 
+def _dmz_host(value):
+    """The router reports the DMZ setting as ``<on>|<host>``; ``0|`` means none is set."""
+    text = str(value or "").strip()
+    if "|" not in text:
+        return text or None
+    enabled, host = text.split("|", 1)
+    if not _flag(enabled):
+        return None
+    return host.strip() or text
+
+
 def security(params, dmz, forwards):
     params = _require(params, SECURITY_PARAMS + SECURITY_OTHER_PARAMS)
     if isinstance(forwards, dict):
@@ -177,7 +188,7 @@ def security(params, dmz, forwards):
         "firewall_level": params.get("fwLevel"),
         "stealth_mode": _flag(params.get("fwStealthMode")),
         # scdmz.cmd is empty when no DMZ host is set; anything it does return is passed through.
-        "dmz_host": params.get("dmzHost") or dmz or None,
+        "dmz_host": _dmz_host(params.get("dmzHost")) or dmz or None,
         "port_forwards": forwards if isinstance(forwards, list) else [],
     }
 

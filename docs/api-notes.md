@@ -61,7 +61,9 @@ Parameter names known to work with `ejGetVal`: `ethIpAddress`, `ethSubnetMask`, 
 `fwLevel`, `fwStealthMode`.
 
 Some names are returned only when asked for in a second field, `ejGetOtherVal`, which is how the
-admin page reads them: `dmzHost` is one (it is silently left out of an `ejGetVal` reply).
+admin page reads them: `dmzHost` is one (it is silently left out of an `ejGetVal` reply). Its
+value is `0|` when no DMZ host is set. The value with one set has not been observed; this
+collection assumes `1|<host>` and returns anything else unchanged.
 
 ## Writes this collection uses
 
