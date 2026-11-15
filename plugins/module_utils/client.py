@@ -19,6 +19,8 @@ from urllib.parse import urlencode
 from ansible.module_utils.basic import env_fallback
 from ansible.module_utils.urls import Request
 
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.errors import meaning as error_meaning
+
 LOGIN_PAGE_MARKER = "Login - Residential Gateway"
 ERROR_PREFIX = "#ERROR_"
 EXCERPT_LENGTH = 80
@@ -41,6 +43,7 @@ class ExosError(Exception):
         self.endpoint = endpoint
         self.action = action
         self.code = code
+        self.meaning = error_meaning(code) if code else None
 
 
 class ExosAuthError(ExosError):
@@ -87,13 +90,21 @@ class ExosClient:
         self.logout()
         return False
 
-    def _post(self, endpoint, params=None):
-        """POST form fields and return the reply body as text. HTTPError is left to the caller."""
-        action = (params or {}).get("action")
+    def _post(self, endpoint, params=None, as_json=False):
+        """POST form fields (or a JSON body) and return the reply body as text.
+
+        Most of the router's endpoints take form fields; some take a JSON body. HTTPError is left
+        to the caller.
+        """
+        action = params.get("action") if isinstance(params, dict) else None
+        headers = self._headers
+        if as_json:
+            headers = dict(headers, **{"Content-Type": "application/json"})
+            body = json.dumps(params)
+        else:
+            body = urlencode(params or {})
         try:
-            response = self._request.post(
-                "%s/%s" % (self.base_url, endpoint), data=urlencode(params or {}), headers=self._headers
-            )
+            response = self._request.post("%s/%s" % (self.base_url, endpoint), data=body, headers=headers)
             return response.read().decode("utf-8", "replace")
         except HTTPError:
             raise
@@ -155,36 +166,78 @@ class ExosClient:
         except (HTTPError, ExosError):
             pass
 
-    def call(self, endpoint, **params):
-        """POST to an endpoint and return its parsed JSON reply, or None for an empty reply."""
-        action = params.get("action")
+    def _exchange(self, endpoint, params, as_json=False):
+        """POST and return the reply text, raising for an HTTP error, ``#ERROR_nnn`` or the login page."""
+        action = params.get("action") if isinstance(params, dict) else None
         where = "%s%s" % (endpoint, " action=%s" % action if action else "")
         try:
-            body = self._post(endpoint, params).strip()
+            body = self._post(endpoint, params, as_json=as_json).strip()
         except HTTPError as err:
             raise ExosError(
                 "HTTP %s from %s for %s" % (err.code, self.host, where), endpoint=endpoint, action=action
             ) from None
-        if not body:
-            return None
         if body.startswith(ERROR_PREFIX):
-            code = body[len(ERROR_PREFIX):].split()[0] if body[len(ERROR_PREFIX):].split() else ""
+            parts = body[len(ERROR_PREFIX):].split()
+            code = parts[0] if parts else ""
+            said = error_meaning(code)
             raise ExosError(
-                "%s returned %s%s for %s" % (self.host, ERROR_PREFIX, code, where),
+                "%s returned %s%s%s for %s" % (self.host, ERROR_PREFIX, code, " (%s)" % said if said else "", where),
                 endpoint=endpoint, action=action, code=code,
             )
-        if LOGIN_PAGE_MARKER in body:
+        if LOGIN_PAGE_MARKER in body or body.lower().startswith("<!doctype html"):
             raise ExosError(
                 "no session on %s: it answered %s with its login page" % (self.host, where),
                 endpoint=endpoint, action=action,
             )
+        return body, where, action
+
+    @staticmethod
+    def _parse(body, host, where, endpoint, action):
+        if not body:
+            return None
         try:
             return json.loads(body)
         except ValueError:
             raise ExosError(
-                "unexpected reply from %s for %s: %r" % (self.host, where, body[:EXCERPT_LENGTH]),
+                "unexpected reply from %s for %s: %r" % (host, where, body[:EXCERPT_LENGTH]),
                 endpoint=endpoint, action=action,
             ) from None
+
+    def call(self, endpoint, **params):
+        """POST form fields and return the parsed JSON reply, or None for an empty reply."""
+        body, where, action = self._exchange(endpoint, params)
+        return self._parse(body, self.host, where, endpoint, action)
+
+    def call_text(self, endpoint, **params):
+        """POST form fields and return the reply as text. Some endpoints answer in plain text."""
+        return self._exchange(endpoint, params)[0]
+
+    def call_json(self, endpoint, payload):
+        """POST a JSON body and return the parsed JSON reply, or None for an empty reply."""
+        body, where, action = self._exchange(endpoint, payload, as_json=True)
+        return self._parse(body, self.host, where, endpoint, action)
+
+    def nonce(self):
+        """A fresh nonce for a write that carries an encrypted secret."""
+        value = self.call_text("get_nonce.cmd").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{16,128}", value):
+            raise ExosError("%s did not return a nonce" % self.host, endpoint="get_nonce.cmd")
+        return value
+
+
+def encrypt_secret(secret, first, nonce, second):
+    """Encrypt a secret the way the router's admin page does before sending it.
+
+    The key is ``sha256("<first>:<nonce>:<second>")``; each character of the secret is XORed with
+    the key bytes in turn and written as two hex digits. What ``first`` and ``second`` are depends
+    on the setting (for a Wi-Fi key: the network name and its security mode).
+    """
+    key = hashlib.sha256(("%s:%s:%s" % (first, nonce, second)).encode("utf-8")).digest()
+    try:
+        data = str(secret).encode("ascii")
+    except UnicodeEncodeError:
+        raise ValueError("the secret must be printable ASCII") from None
+    return "".join("%02x" % (key[i % len(key)] ^ byte) for i, byte in enumerate(data))
 
 
 def client_from_module(module):

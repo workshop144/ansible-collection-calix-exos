@@ -40,6 +40,9 @@ class FakeRouter:
         self.leases = [dict(x) for x in (leases or [])]
         self.replies = dict(replies or {})
         self.calls = []
+        self.json_calls = []   # endpoints that were sent a JSON body
+        self.handlers = {}     # endpoint -> callable(router, action, params) returning str, dict or list
+        self.state = {}        # free-form state for handlers
         self.logged_in = False
         self.drop_writes = False
         self.refuse_silently = False  # answer a wrong password with HTTP 200 and no cookie
@@ -65,9 +68,13 @@ class FakeRouter:
         endpoint = urlparse(url).path.lstrip("/")
         if isinstance(data, bytes):
             data = data.decode("utf-8")
-        params = dict(parse_qsl(data or "", keep_blank_values=True))
+        if "json" in (headers or {}).get("Content-Type", ""):
+            params = json.loads(data or "null")
+            self.json_calls.append(endpoint)
+        else:
+            params = dict(parse_qsl(data or "", keep_blank_values=True))
         self.calls.append((endpoint, params))
-        action = params.get("action")
+        action = params.get("action") if isinstance(params, dict) else None
 
         queued = self._failures.get((endpoint, action))
         if queued:
@@ -103,6 +110,9 @@ class FakeRouter:
             return ""
         if not self.logged_in:
             return LOGIN_PAGE
+        if endpoint in self.handlers:
+            reply = self.handlers[endpoint](self, action, params)
+            return reply if isinstance(reply, str) else json.dumps(reply)
         if endpoint == "dhcp_reservation.cmd" and action == "init":
             return json.dumps({
                 "networks": [{"network": "Primary", "dhcpPool": "lan", "dhcpEnbled": "1",
