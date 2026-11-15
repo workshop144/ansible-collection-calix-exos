@@ -31,7 +31,7 @@ collections:
     version: v0.1.0
 ```
 
-then `ansible-galaxy collection install -r requirements.yml`. Needs ansible-core 2.16 or later
+then `ansible-galaxy collection install -r requirements.yml`. Needs ansible-core 2.17 or later
 and nothing else.
 
 ## Connecting

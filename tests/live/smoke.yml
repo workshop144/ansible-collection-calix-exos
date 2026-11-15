@@ -1,0 +1,102 @@
+---
+- name: Smoke test against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    smoke_mac: "02:00:00:00:00:01"
+    smoke_password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+  tasks:
+    - name: The router to test must be named
+      ansible.builtin.assert:
+        that: exos_host is defined
+        fail_msg: "Pass the router with -e exos_host=<address>."
+
+    - name: Read the router
+      workshop144.calix_exos.info:
+        host: "{{ exos_host }}"
+        password: "{{ smoke_password }}"
+      register: smoke_first
+
+    - name: Show what was read
+      ansible.builtin.debug:
+        msg:
+          system: "{{ smoke_first.exos.system }}"
+          security: "{{ smoke_first.exos.security }}"
+          lan: "{{ smoke_first.exos.lan }}"
+          reservations: "{{ smoke_first.exos.dhcp_reservations | length }}"
+          clients: "{{ smoke_first.exos.clients | length }}"
+          wifi: "{{ smoke_first.exos.wifi }}"
+
+    - name: The made-up MAC must not be reserved already
+      ansible.builtin.assert:
+        that: smoke_mac not in (smoke_first.exos.dhcp_reservations | map(attribute='mac'))
+
+    - name: Pick the highest free address in the pool
+      ansible.builtin.set_fact:
+        smoke_ip: "{{ smoke_candidates | difference(smoke_used) | last }}"
+      vars:
+        smoke_prefix: "{{ smoke_first.exos.lan.pool_end.split('.')[:3] | join('.') }}"
+        smoke_low: "{{ smoke_first.exos.lan.pool_start.split('.')[3] | int }}"
+        smoke_high: "{{ smoke_first.exos.lan.pool_end.split('.')[3] | int }}"
+        smoke_candidates: "{{ range(smoke_low | int, (smoke_high | int) + 1) | map('string') | map('regex_replace', '^', smoke_prefix ~ '.') | list }}"
+        smoke_used: "{{ (smoke_first.exos.clients | map(attribute='ip') | list) + (smoke_first.exos.dhcp_reservations | map(attribute='ip') | list) }}"
+
+    - name: Add, repeat, remove, repeat
+      block:
+        - name: Add the reservation
+          workshop144.calix_exos.dhcp_reservation:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            mac: "{{ smoke_mac }}"
+            ip: "{{ smoke_ip }}"
+          register: smoke_add
+
+        - name: Add it again
+          workshop144.calix_exos.dhcp_reservation:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            mac: "{{ smoke_mac }}"
+            ip: "{{ smoke_ip }}"
+          register: smoke_add_again
+
+        - name: Remove it
+          workshop144.calix_exos.dhcp_reservation:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            mac: "{{ smoke_mac }}"
+            state: absent
+          register: smoke_remove
+
+        - name: Remove it again
+          workshop144.calix_exos.dhcp_reservation:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            mac: "{{ smoke_mac }}"
+            state: absent
+          register: smoke_remove_again
+
+        - name: Read the router again
+          workshop144.calix_exos.info:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            gather_subset: [dhcp_reservations]
+          register: smoke_last
+
+        - name: Each step did what it should, and the table is as it was
+          ansible.builtin.assert:
+            that:
+              - smoke_add is changed
+              - smoke_add.reservation.ip == smoke_ip
+              - smoke_add_again is not changed
+              - smoke_remove is changed
+              - smoke_remove_again is not changed
+              - smoke_last.exos.dhcp_reservations == smoke_first.exos.dhcp_reservations
+            success_msg: "Smoke test passed on {{ smoke_first.exos.system.model }} EXOS {{ smoke_first.exos.system.version }}."
+      always:
+        - name: Make sure the made-up reservation is gone
+          workshop144.calix_exos.dhcp_reservation:
+            host: "{{ exos_host }}"
+            password: "{{ smoke_password }}"
+            mac: "{{ smoke_mac }}"
+            state: absent
