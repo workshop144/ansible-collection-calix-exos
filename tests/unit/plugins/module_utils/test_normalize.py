@@ -53,14 +53,16 @@ def test_clients():
 def test_wifi_joins_status_and_setup():
     out = normalize.wifi(replies.WL_STATUS, replies.SSID_PRIMARY)
     assert out[0] == {"band": "5GHz", "ssid": "example", "enabled": True, "hidden": False,
-                      "security": "psk-mixed+aes", "wps": True, "wps_type": "PushButton", "isolation": False}
+                      "security": "psk-mixed+aes", "wps": True, "wps_type": "PushButton", "isolation": False,
+                      "network_type": None, "gateway": None}
     assert out[1]["band"] == "2.4GHz" and out[1]["wps"] is False
 
 
 def test_wifi_includes_ssids_with_no_status_row():
     out = normalize.wifi(replies.WL_STATUS, replies.SSID_PRIMARY)
     assert out[2] == {"band": "6GHz", "ssid": "reserved-6g", "enabled": True, "hidden": False,
-                      "security": "wpa3", "wps": None, "wps_type": None, "isolation": False}
+                      "security": "wpa3", "wps": None, "wps_type": None, "isolation": False,
+                      "network_type": None, "gateway": None}
 
 
 def test_wifi_drops_key_material():
@@ -162,6 +164,12 @@ GUEST_STATUS = [
 # As seen on a router with a guest network: its setup row carries no band.
 GUEST_SETUP = {"wlSsid": "example-guest", "wlHidden": 0, "wlEnbl": 1, "wlAPIsolation": 1,
                "wlAuthMode": "wpa3-mixed", "wlWpaPsk": "deadbeef"}
+# The row a real router returns for a guest network: no band, no hidden or isolation fields.
+REAL_GUEST_SETUP = {"is6Supported": "0", "networkType": "guest", "bandFlag": -1, "smart_qos": 0,
+                    "wlRadioIdx": 15, "wlSsidIdx": 2, "wlSsid": "example-guest", "wlEnbl": 1,
+                    "wlAuthMode": "wpa3-mixed", "wlSubnet": 1, "wlGateway": "192.0.2.129",
+                    "wlMask": "255.255.255.128", "wlStartIp": "192.0.2.130", "wlEndIp": "192.0.2.254",
+                    "wlEnblTime": "", "wlDisblTime": ""}
 
 
 def test_wifi_guest_setup_row_without_a_band_applies_to_each_band():
@@ -185,4 +193,23 @@ def test_wifi_wps_type_not_applicable_is_none():
 def test_wifi_bandless_setup_row_with_no_status_is_listed_once_without_a_band():
     out = normalize.wifi([], [GUEST_SETUP])
     assert out == [{"band": None, "ssid": "example-guest", "enabled": True, "hidden": False,
-                    "security": "wpa3-mixed", "wps": None, "wps_type": None, "isolation": True}]
+                    "security": "wpa3-mixed", "wps": None, "wps_type": None, "isolation": True,
+                    "network_type": None, "gateway": None}]
+
+
+def test_wifi_fields_a_setup_row_does_not_carry_are_unknown_not_false():
+    out = normalize.wifi(GUEST_STATUS, [REAL_GUEST_SETUP])
+    assert out[0]["hidden"] is None
+    assert out[0]["isolation"] is None
+
+
+def test_wifi_reports_network_type_and_gateway_of_a_guest_network():
+    out = normalize.wifi(GUEST_STATUS, [REAL_GUEST_SETUP])
+    assert [row["network_type"] for row in out] == ["guest", "guest"]
+    assert out[0]["gateway"] == "192.0.2.129"
+
+
+def test_wifi_primary_network_has_no_type_or_gateway():
+    out = normalize.wifi(replies.WL_STATUS, replies.SSID_PRIMARY)
+    assert out[0]["network_type"] is None and out[0]["gateway"] is None
+    assert out[2]["network_type"] is None

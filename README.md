@@ -28,7 +28,7 @@ In `requirements.yml`:
 collections:
   - name: https://github.com/workshop144/ansible-collection-calix-exos.git
     type: git
-    version: v0.1.0
+    version: v0.1.1
 ```
 
 then `ansible-galaxy collection install -r requirements.yml`. Needs ansible-core 2.17 or later

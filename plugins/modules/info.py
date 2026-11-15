@@ -87,14 +87,18 @@ exos:
     wifi:
       description:
         - One entry per network name per band. No key material.
-        - The C(hidden) and C(isolation) keys are null when the router gives no setup details for
-          a network, and C(band) is null for a network it lists without a band or a status.
+        - The C(hidden) and C(isolation) keys are null when the router does not report them for
+          a network (it does not for a guest network), and C(band) is null for a network it lists
+          without a band or a status.
+        - C(network_type) is V(guest) for a guest network, with its own C(gateway); both are null
+          for a primary network.
         - The C(wps) and C(wps_type) keys are null for a network the router does not report a
           status for.
       type: list
       elements: dict
       sample: [{"band": "5GHz", "ssid": "example", "enabled": true, "hidden": false,
-                "security": "psk-mixed+aes", "wps": true, "wps_type": "PushButton", "isolation": false}]
+                "security": "psk-mixed+aes", "wps": true, "wps_type": "PushButton", "isolation": false,
+                "network_type": null, "gateway": null}]
     security:
       description: UPnP, firewall, DMZ and port forwarding state.
       type: dict

@@ -30,6 +30,11 @@ def _flag(value):
     return str(value).strip().lower() in ("1", "true", "on", "yes", "enabled")
 
 
+def _flag_or_none(row, key):
+    """A flag from a row, or None when the row does not carry it: unknown is not the same as off."""
+    return _flag(row[key]) if isinstance(row, dict) and key in row else None
+
+
 def _int(value):
     try:
         return int(str(value).strip())
@@ -166,11 +171,13 @@ def wifi(status, ssids):
             "band": band,
             "ssid": ssid,
             "enabled": _flag(row.get("state")),
-            "hidden": _flag(match.get("wlHidden")) if match else None,
+            "hidden": _flag_or_none(match, "wlHidden"),
             "security": row.get("secureType"),
             "wps": _flag(row.get("wps")),
             "wps_type": _wps_type(row.get("wpsType")),
-            "isolation": _flag(match.get("wlAPIsolation")) if match else None,
+            "isolation": _flag_or_none(match, "wlAPIsolation"),
+            "network_type": match.get("networkType") if match else None,
+            "gateway": (match.get("wlGateway") or None) if match else None,
         })
     leftover = list(by_band.items()) + [((None, ssid), row) for ssid, row in any_band.items() if ssid not in used]
     for (band, ssid), row in leftover:
@@ -178,11 +185,13 @@ def wifi(status, ssids):
             "band": band,
             "ssid": ssid,
             "enabled": _flag(row.get("wlEnbl")),
-            "hidden": _flag(row.get("wlHidden")),
+            "hidden": _flag_or_none(row, "wlHidden"),
             "security": row.get("wlAuthMode"),
             "wps": None,
             "wps_type": None,
-            "isolation": _flag(row.get("wlAPIsolation")),
+            "isolation": _flag_or_none(row, "wlAPIsolation"),
+            "network_type": row.get("networkType"),
+            "gateway": row.get("wlGateway") or None,
         })
     return out
 

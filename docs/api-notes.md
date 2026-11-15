@@ -72,6 +72,10 @@ collection assumes `1|<host>` and returns anything else unchanged.
 | `dhcpdstaticlease.cmd` | `action=add`, `dhcpPool`, `mac`, `static_ip` | adds a reservation; empty reply |
 | `dhcpdstaticlease.cmd` | `action=remove`, `rmLst=<ip>` | removes the reservation for that address; empty reply |
 
+A guest network's `get_ssid_setup` row (with `wlSsidUsage=guest`) has a different shape: no
+`wlBand`, `wlHidden` or `wlAPIsolation`, and instead `networkType` (`guest`), `bandFlag`,
+`wlSubnet`, `wlGateway`, `wlMask`, `wlStartIp`, `wlEndIp`.
+
 The default pool is called `lan`. MAC addresses come back lower-case and colon-separated.
 
 ## Other things noticed
