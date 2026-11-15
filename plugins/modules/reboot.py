@@ -8,7 +8,7 @@ from __future__ import annotations
 DOCUMENTATION = r"""
 module: reboot
 short_description: Restart a Calix EXOS router
-version_added: "0.3.0"
+version_added: "0.2.0"
 description:
   - Restarts the router (Utilities > Reboot in its admin page) and, by default, waits until it
     answers again.

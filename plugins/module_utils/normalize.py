@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError, normalize_mac
 
-SUBSETS = ("system", "lan", "dhcp_reservations", "clients", "wifi", "security", "wan")
+SUBSETS = (
+    "system", "lan", "dhcp", "dhcp_reservations", "clients", "ports", "wifi", "radios", "security", "firewall_rules",
+    "dns_host_mappings", "ddns", "arp_spoofing", "controls", "ipv6_lan", "access_schedules", "service_blocking",
+    "wan", "internet",
+)
 
 LAN_PARAMS = ("ethIpAddress", "ethSubnetMask", "enblDhcpSrv", "dhcpEthStart", "dhcpEthEnd", "dhcpLeasedTime")
 SECURITY_PARAMS = ("enblUpnp", "enblUpnpnat", "fwLevel", "fwStealthMode")

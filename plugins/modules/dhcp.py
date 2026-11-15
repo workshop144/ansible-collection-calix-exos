@@ -8,7 +8,7 @@ from __future__ import annotations
 DOCUMENTATION = r"""
 module: dhcp
 short_description: Set the DHCP server and LAN address of a Calix EXOS router
-version_added: "0.3.0"
+version_added: "0.2.0"
 description:
   - Sets the DHCP server on the LAN (on or off, address pool, lease time, DNS servers handed
     out), the router's host and domain name, and, with O(force=true), the router's own LAN
@@ -102,29 +102,9 @@ import re
 import time
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, flag, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
 
-NAMES = ("dhcpEthStart", "dhcpEthEnd", "dhcpLeasedTime", "enblDhcpSrv", "enblDhcpReservation", "ethIpAddress", "ethSubnetMask",
-         "dnsType", "dnsHostName", "dnsDomainName", "dhcpPrimaryDNS", "dhcpSecondaryDNS", "dhcpOptionTftpEn",
-         "dhcpOptionTftpOpt150", "dhcpOptionTftpOpt66")
 LABEL = r"[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
-
-
-def _public(raw):
-    custom = raw["dnsType"] == "custom"
-    servers = [s for s in (raw["dhcpPrimaryDNS"], raw["dhcpSecondaryDNS"]) if s and s != "0.0.0.0"] if custom else []
-    lease = str(raw["dhcpLeasedTime"])
-    return {
-        "enabled": flag(raw["enblDhcpSrv"]),
-        "pool_start": raw["dhcpEthStart"],
-        "pool_end": raw["dhcpEthEnd"],
-        "lease_seconds": int(lease) if lease.isdigit() else None,
-        "dns_servers": servers,
-        "lan_address": raw["ethIpAddress"],
-        "lan_netmask": raw["ethSubnetMask"],
-        "hostname": raw["dnsHostName"],
-        "domain": raw["dnsDomainName"],
-    }
 
 
 def _check(wanted):
@@ -188,8 +168,8 @@ def run(params, client, check_mode, sleep=time.sleep):
     if all(params.get(name) is None for name in options):
         raise ExosModuleError("give at least one setting to change")
     with client:
-        raw = settings.params(client, names=NAMES)
-        before = _public(raw)
+        raw = settings.params(client, names=settings.DHCP_NAMES)
+        before = settings.public_dhcp(raw)
         wanted = dict(before)
         for name in ("enabled", "lease_seconds", "hostname", "domain"):
             if params.get(name) is not None:
@@ -211,7 +191,7 @@ def run(params, client, check_mode, sleep=time.sleep):
             if not moves:
                 now = None
                 for dummy in range(5):   # the DHCP service restarts; give it a moment
-                    now = _public(settings.params(client, names=NAMES))
+                    now = settings.public_dhcp(settings.params(client, names=settings.DHCP_NAMES))
                     if now == wanted:
                         break
                     sleep(2)

@@ -248,6 +248,8 @@ def _wlinfo(router, action, params):
     wifi = router.state["wifi"]
     if action == "get_radio_setup":
         return [dict(radio) for radio in wifi["radios"]]
+    if action == "get_status":
+        return _wl_status(router)
     if action == "get_pool_status":
         return dict(wifi["pool"])
     if action == "get_ssid_setup" and params.get("wlSsidUsage") == "primary":
@@ -333,6 +335,23 @@ def _reboot(router, action, params):
     return ""
 
 
+def _wl_status(router):
+    p = router.state["wifi"]["primary"]
+    rows = [{"radioid": i, "ifaceid": 1, "ssid": p["ssid"], "broadcast": 1, "radio": 1, "state": 1, "mode": "11ax",
+             "frequency": band, "channelMode": 0, "channel": 1, "secured": 1, "secureType": "psk-mixed+aes",
+             "MACAuthFilter": "Disabled", "wps": 1, "wpsType": "PushButton"} for i, band in ((1, "5GHz"), (2, "2.4GHz"))]
+    return rows
+
+
+def _static(key):
+    return lambda router, action, params: router.state[key]
+
+
+def _ddns(router, action, params):
+    blank = {"state": "0", "server": "", "user": "", "pwd": "", "hostname": "", "ipsrc": "", "website": ""}
+    return {"ipv4": dict(blank, **router.state["ddns"]), "ipv6": dict(blank)}
+
+
 def settings_router(**overrides):
     """A fake router with every simple setting in its usual state."""
     router = FakeRouter()
@@ -350,6 +369,19 @@ def settings_router(**overrides):
         "controls": {"sip": 0, "led": 1, "brightness": 100, "brightness_supported": 1},
         "chains": {"dsv4": [], "usv4": [], "dsv6": [], "usv6": []},
         "schedule_type": "ewi",
+        "ddns": {"state": "1", "server": "dyndns.org", "user": "someone", "pwd": "c0ffee", "nonce": "ab" * 32,
+                 "hostname": "home.example.org", "ipsrc": "network"},
+        "system": {"system_info": [{"param": "Model Number", "value": "GS4227W"}, {"param": "EXOS Version", "value": "25.4.0"}]},
+        "connection": {"connection": {"wan": {"state": 2, "color": "green"}}, "gateway": []},
+        "internet": {"status": [{"param": "IPv4 Connection", "value": "Connected", "color": "green"}],
+                     "settings": [{"param": "MTU Size", "value": "1500"}],
+                     "ipv4_addressing": [{"param": "Device IPv4 Address", "value": "198.51.100.20"},
+                                         {"param": "DNS Address #1", "value": "198.51.100.53"}],
+                     "ipv6_addressing": [], "_6rd": [], "ds_lite": [], "mapt": []},
+        "ports": [{"type": "Ethernet", "rate": "1000M", "port_id": 1, "packetsSent_ipv4": 10, "packetRecv_ipv4": 20,
+                   "packetsSent_ipv6": 0, "packetRecv_ipv6": 0},
+                  {"type": "Ethernet", "rate": "Disconnected", "port_id": 2, "packetsSent_ipv4": 0, "packetRecv_ipv4": 0,
+                   "packetsSent_ipv6": 0, "packetRecv_ipv6": 0}],
         "wifi": {
             "radios": [
                 {"160_80+80": "0", "802.11ax": "1", "band": "5G", "dfs": "1", "enable": "1", "is6Supported": "0", "mimo": "0",
@@ -379,7 +411,7 @@ def settings_router(**overrides):
         "trace": {"final": {"status": 0, "ip_addr": "192.0.2.9", "mode": "icmp", "reverse_dns": "disabled", "version": "ipv4",
                             "trace": [{"hops": "1  192.0.2.1", "time1": "0.5 ms", "time2": "0.4 ms", "time3": "0.4 ms"},
                                       {"hops": "2  192.0.2.9", "time1": "1.5 ms", "time2": "1.4 ms", "time3": "1.4 ms"}]}},
-        "read_endpoints": ("advfw_load.cmd", "apps_status.cmd"),
+        "read_endpoints": ("advfw_load.cmd", "apps_status.cmd", "status_lanstatus_ipv6.cmd"),
     })
     router.state.update(overrides)
     router.handlers.update({
@@ -409,6 +441,11 @@ def settings_router(**overrides):
         "dhcpcfg.cmd": _dhcpcfg,
         "rebootinfo.cgi": _reboot,
         "get_nonce.cmd": lambda router, action, params: "cd" * 32,
+        "status_system.cmd": _static("system"),
+        "status_connection.cmd": _static("connection"),
+        "internet_status.cmd": _static("internet"),
+        "status_lanstatus_ipv6.cmd": _static("ports"),
+        "ddnsmngr.cmd": _ddns,
         "traceroute.cmd": _trace,
     })
     return router

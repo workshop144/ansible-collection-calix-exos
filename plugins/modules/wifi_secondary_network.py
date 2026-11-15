@@ -8,7 +8,7 @@ from __future__ import annotations
 DOCUMENTATION = r"""
 module: wifi_secondary_network
 short_description: Manage a guest or other secondary Wi-Fi network on a Calix EXOS router
-version_added: "0.3.0"
+version_added: "0.2.0"
 description:
   - Creates, changes or removes one secondary network (Wi-Fi > Secondary Networks in the
     router's admin page). The primary network is managed with M(workshop144.calix_exos.wifi_network).

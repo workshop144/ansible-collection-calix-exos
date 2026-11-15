@@ -319,3 +319,80 @@ def public_ipv6_lan(raw):
         "dhcpv6_mode": raw["dhcpv6Mode"],
         "dns_servers": [value for value in (raw.get("advPriDns"), raw.get("advSecDns")) if value] if custom else [],
     }
+
+
+# ---- DHCP server and LAN address
+
+DHCP_NAMES = (
+    "dhcpEthStart", "dhcpEthEnd", "dhcpLeasedTime", "enblDhcpSrv", "enblDhcpReservation", "ethIpAddress", "ethSubnetMask",
+    "dnsType", "dnsHostName", "dnsDomainName", "dhcpPrimaryDNS", "dhcpSecondaryDNS", "dhcpOptionTftpEn",
+    "dhcpOptionTftpOpt150", "dhcpOptionTftpOpt66",
+)
+
+
+def public_dhcp(raw):
+    custom = raw["dnsType"] == "custom"
+    servers = [s for s in (raw["dhcpPrimaryDNS"], raw["dhcpSecondaryDNS"]) if s and s != "0.0.0.0"] if custom else []
+    lease = str(raw["dhcpLeasedTime"])
+    return {
+        "enabled": flag(raw["enblDhcpSrv"]),
+        "pool_start": raw["dhcpEthStart"],
+        "pool_end": raw["dhcpEthEnd"],
+        "lease_seconds": int(lease) if lease.isdigit() else None,
+        "dns_servers": servers,
+        "lan_address": raw["ethIpAddress"],
+        "lan_netmask": raw["ethSubnetMask"],
+        "hostname": raw["dnsHostName"],
+        "domain": raw["dnsDomainName"],
+    }
+
+
+# ---- dynamic DNS (read only; the password is never returned)
+
+def read_ddns(client):
+    reply = client.call_json("ddnsmngr.cmd", {"action": "get"})
+    if not isinstance(reply, dict) or "ipv4" not in reply:
+        raise ExosError("the router did not return its dynamic DNS settings", endpoint="ddnsmngr.cmd", action="get")
+    out = {}
+    for version in ("ipv4", "ipv6"):
+        entry = reply.get(version) if isinstance(reply.get(version), dict) else {}
+        out[version] = {
+            "enabled": flag(entry.get("state", 0)),
+            "server": entry.get("server") or None,
+            "user": entry.get("user") or None,
+            "hostname": entry.get("hostname") or None,
+            "ip_source": entry.get("ipsrc") or None,
+            "website": entry.get("website") or None,
+        }
+    return out
+
+
+# ---- status pages
+
+def _label(text):
+    return "_".join(part for part in "".join(c.lower() if c.isalnum() else " " for c in str(text)).split())
+
+
+def read_internet(client):
+    """The Status > Internet page: each section as label -> value, labels in snake case."""
+    reply = client.call("internet_status.cmd", action="getStatus")
+    if not isinstance(reply, dict):
+        raise ExosError("the router did not return its internet status", endpoint="internet_status.cmd", action="getStatus")
+    sections = {"status": "status", "settings": "settings", "ipv4": "ipv4_addressing", "ipv6": "ipv6_addressing"}
+    return {
+        name: {_label(row.get("param")): row.get("value") for row in reply.get(key) or [] if isinstance(row, dict)}
+        for name, key in sections.items()
+    }
+
+
+def read_ports(client):
+    reply = client.call("status_lanstatus_ipv6.cmd")
+    if reply is None:
+        return []
+    if not isinstance(reply, list):
+        raise ExosError("the router did not return its Ethernet ports", endpoint="status_lanstatus_ipv6.cmd")
+    return [
+        {"port": row.get("port_id"), "type": row.get("type"), "rate": row.get("rate"),
+         "connected": str(row.get("rate", "")).lower() not in ("", "disconnected")}
+        for row in reply if isinstance(row, dict)
+    ]

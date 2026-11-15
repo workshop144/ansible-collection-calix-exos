@@ -8,7 +8,7 @@ from __future__ import annotations
 DOCUMENTATION = r"""
 module: wifi_radio
 short_description: Set a Wi-Fi radio of a Calix EXOS router
-version_added: "0.3.0"
+version_added: "0.2.0"
 description:
   - Turns one of the router's radios on or off and sets the options the admin page offers for it
     (Wi-Fi > Radio). Channel, channel width and power are not on that page and are not managed.

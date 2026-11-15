@@ -8,7 +8,7 @@ from __future__ import annotations
 DOCUMENTATION = r"""
 module: wifi_network
 short_description: Set the primary Wi-Fi network of a Calix EXOS router
-version_added: "0.3.0"
+version_added: "0.2.0"
 description:
   - Sets the name, security, key and visibility of the router's primary network (Wi-Fi > Primary
     Network in its admin page). The router uses the same settings on every band.
