@@ -126,7 +126,11 @@ ERROR_MESSAGES = {
     "118": "DNS Server Mapping delete failed!",
     "119": "Configure failed due to management ownership of PoE!",
     "120": "Configure PoE failed!",
-    "121": "Golden configuration file cannot be created when WAN link has been detected at least once. Please pull out fiber or cable cord, build-level reset, configure the WAN services and other required services, then generate the golden configuration file.",
+    "121": (
+        "Golden configuration file cannot be created when WAN link has been detected at least once. Please pull out "
+        "fiber or cable cord, build-level reset, configure the WAN services and other required services, then generate "
+        "the golden configuration file."
+    ),
     "122": "Wan interface status is down.",
     "123": "An existing Layer 2 Service already has the IPTV SSID attached to it!",
     "124": "An existing Layer 2 Service already has the 2.4GHz Guest SSID attached to it!",
@@ -175,7 +179,11 @@ ERROR_MESSAGES = {
     "167": "The 6G SSID Pool is full.",
     "168": "The Dual Band SSID Pool is full.",
     "169": "WFH could not be created. SmartQos is disable!",
-    "170": "Golden configuration file cannot be created when WAN link has connected once. Please pull out fiber or cable cord, and perform a build-level reset. Configure the WAN services and other required services after reboot. And generate the golden configuration file later.",
+    "170": (
+        "Golden configuration file cannot be created when WAN link has connected once. Please pull out fiber or cable "
+        "cord, and perform a build-level reset. Configure the WAN services and other required services after reboot. "
+        "And generate the golden configuration file later."
+    ),
     "171": "This device is not in SmartBiz mode.",
     "172": "Query string for using is null.",
     "173": "Error occurred when setting SmartBiz SSID.",
@@ -225,7 +233,10 @@ ERROR_MESSAGES = {
     "519": "Changing management protocol to TR69 will trigger a reboot. Are you sure to proceed?",
     "520": "You are not allowed to change Management Protocol from TR69 to OMCI. Please do a restore default to change Management Protocol to OMCI.",
     "521": "The ACS URL is the same with the other ACS URL.",
-    "522": "The Version can only be a combination of numerics and dots on a.b.c.d format. Four groups of numbers, split by \".\", each group can contain at most 2 numbers. (EXAMPLE : 8.0.10.20)",
+    "522": (
+        "The Version can only be a combination of numerics and dots on a.b.c.d format. Four groups of numbers, split by"
+        " \".\", each group can contain at most 2 numbers. (EXAMPLE : 8.0.10.20)"
+    ),
     "533": "You are about to Reboot your gateway device. Click ok to Reboot.",
     "534": "Restoring the gateway to default settings will remove all custom user configurations.  Click OK to restore default settings.",
     "535": "Trace route canceled.",

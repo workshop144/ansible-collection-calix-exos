@@ -1,0 +1,332 @@
+---
+# Live test of the simple settings modules. Every change is put back, also when a step fails.
+- name: Settings modules against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exos: &exos
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+    live_name: exos-live-test.example
+    live_port: 47999
+  tasks:
+    - name: The router to test must be named, with a password
+      ansible.builtin.assert:
+        that:
+          - exos_host is defined
+          - exos.password | length > 0
+
+    - name: Read the router
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [lan, clients, dhcp_reservations]
+      register: live_info
+
+    - name: Pick an address in the pool that nothing uses
+      ansible.builtin.set_fact:
+        live_ip: "{{ live_candidates | reject('in', live_used) | last }}"
+      vars:
+        live_prefix: "{{ live_info.exos.lan.pool_end.split('.')[:3] | join('.') }}"
+        live_low: "{{ live_info.exos.lan.pool_start.split('.')[3] | int }}"
+        live_high: "{{ live_info.exos.lan.pool_end.split('.')[3] | int }}"
+        live_candidates: "{{ range(live_low | int, (live_high | int) + 1) | map('string') | map('regex_replace', '^', live_prefix ~ '.') | list }}"
+        live_used: "{{ (live_info.exos.clients | map(attribute='ip') | list) + (live_info.exos.dhcp_reservations | map(attribute='ip') | list) }}"
+
+    # ------------------------------------------------------------------ upnp
+    - name: UPnP as it is now
+      workshop144.calix_exos.upnp:
+        <<: *exos
+        enabled: false
+      check_mode: true
+      register: upnp_now
+
+    - name: UPnP round trip
+      block:
+        - name: UPnP flipped
+          workshop144.calix_exos.upnp:
+            <<: *exos
+            enabled: "{{ not upnp_now.diff.before.enabled }}"
+          register: upnp_flip
+
+        - name: UPnP flipped again changes nothing
+          workshop144.calix_exos.upnp:
+            <<: *exos
+            enabled: "{{ not upnp_now.diff.before.enabled }}"
+          register: upnp_again
+
+        - name: UPnP changed once
+          ansible.builtin.assert:
+            that:
+              - upnp_flip is changed
+              - upnp_again is not changed
+              - upnp_again.upnp.enabled == (not upnp_now.diff.before.enabled)
+      always:
+        - name: UPnP back as it was
+          workshop144.calix_exos.upnp:
+            <<: *exos
+            enabled: "{{ upnp_now.diff.before.enabled }}"
+            nat_t: "{{ upnp_now.diff.before.nat_t }}"
+          register: upnp_back
+
+    - name: UPnP was restored by a real change
+      ansible.builtin.assert:
+        that: upnp_back is changed and upnp_back.upnp == upnp_now.diff.before
+
+    # ------------------------------------------------------------------ dmz
+    - name: DMZ as it is now
+      workshop144.calix_exos.dmz:
+        <<: *exos
+        state: absent
+      check_mode: true
+      register: dmz_now
+
+    - name: This test needs a router with no DMZ host set
+      ansible.builtin.assert:
+        that: dmz_now.diff.before is none
+
+    - name: DMZ round trip
+      block:
+        - name: DMZ host set
+          workshop144.calix_exos.dmz:
+            <<: *exos
+            dmz_host: "{{ live_ip }}"
+          register: dmz_set
+
+        - name: DMZ host set again changes nothing
+          workshop144.calix_exos.dmz:
+            <<: *exos
+            dmz_host: "{{ live_ip }}"
+          register: dmz_again
+
+        - name: The info module sees the DMZ host
+          workshop144.calix_exos.info:
+            <<: *exos
+            gather_subset: [security]
+          register: dmz_info
+
+        - name: DMZ changed once and is visible
+          ansible.builtin.assert:
+            that:
+              - dmz_set is changed
+              - dmz_again is not changed
+              - dmz_info.exos.security.dmz_host == live_ip
+      always:
+        - name: DMZ host cleared
+          workshop144.calix_exos.dmz:
+            <<: *exos
+            state: absent
+          register: dmz_clear
+
+    - name: DMZ was cleared by a real change
+      ansible.builtin.assert:
+        that: dmz_clear is changed and dmz_clear.dmz_host is none
+
+    # ------------------------------------------------------------------ port_forward
+    - name: Port forward round trip
+      block:
+        - name: Port forward added
+          workshop144.calix_exos.port_forward:
+            <<: *exos
+            protocol: tcp
+            remote_port: "{{ live_port }}"
+            local_ip: "{{ live_ip }}"
+            local_port: 8080
+          register: pf_add
+
+        - name: Port forward added again changes nothing
+          workshop144.calix_exos.port_forward:
+            <<: *exos
+            protocol: tcp
+            remote_port: "{{ live_port }}"
+            local_ip: "{{ live_ip }}"
+            local_port: 8080
+          register: pf_again
+
+        - name: Port forward moved to another local port is a replacement
+          workshop144.calix_exos.port_forward:
+            <<: *exos
+            protocol: tcp
+            remote_port: "{{ live_port }}"
+            local_ip: "{{ live_ip }}"
+            local_port: 8081
+          register: pf_move
+
+        - name: The info module sees the port forward
+          workshop144.calix_exos.info:
+            <<: *exos
+            gather_subset: [security]
+          register: pf_info
+
+        - name: Port forward changed as expected and is visible
+          ansible.builtin.assert:
+            that:
+              - pf_add is changed
+              - pf_again is not changed
+              - pf_move is changed and pf_move.rule.local_port == 8081
+              - pf_info.exos.security.port_forwards | length >= 1
+      always:
+        - name: Port forward removed
+          workshop144.calix_exos.port_forward:
+            <<: *exos
+            protocol: tcp
+            remote_port: "{{ live_port }}"
+            state: absent
+          register: pf_remove
+
+    - name: Port forward removed again changes nothing
+      workshop144.calix_exos.port_forward:
+        <<: *exos
+        protocol: tcp
+        remote_port: "{{ live_port }}"
+        state: absent
+      register: pf_gone
+
+    - name: Port forward was removed by a real change
+      ansible.builtin.assert:
+        that: pf_remove is changed and pf_gone is not changed
+
+    # ------------------------------------------------------------------ dns_host_mapping
+    - name: DNS mapping round trip
+      block:
+        - name: DNS name added
+          workshop144.calix_exos.dns_host_mapping:
+            <<: *exos
+            hostname: "{{ live_name }}"
+            ip: 192.0.2.77
+          register: dns_add
+
+        - name: DNS name added again changes nothing
+          workshop144.calix_exos.dns_host_mapping:
+            <<: *exos
+            hostname: "{{ live_name }}"
+            ip: 192.0.2.77
+          register: dns_again
+
+        - name: Ask the router's DNS server for the name
+          ansible.builtin.command: "dig +short +time=3 +tries=2 {{ live_name }} @{{ exos_host }}"
+          register: dns_dig
+          changed_when: false
+
+        - name: DNS name moved to another address is a replacement
+          workshop144.calix_exos.dns_host_mapping:
+            <<: *exos
+            hostname: "{{ live_name }}"
+            ip: 192.0.2.78
+          register: dns_move
+
+        - name: DNS mapping changed as expected and resolves
+          ansible.builtin.assert:
+            that:
+              - dns_add is changed
+              - dns_again is not changed
+              - dns_move is changed
+              - "'192.0.2.77' in dns_dig.stdout"
+      always:
+        - name: DNS name removed
+          workshop144.calix_exos.dns_host_mapping:
+            <<: *exos
+            hostname: "{{ live_name }}"
+            state: absent
+          register: dns_remove
+
+    - name: DNS mapping was removed by a real change
+      ansible.builtin.assert:
+        that: dns_remove is changed and dns_remove.mapping is none
+
+    # ------------------------------------------------------------------ arp_spoofing
+    - name: ARP spoofing protection as it is now
+      workshop144.calix_exos.arp_spoofing:
+        <<: *exos
+        enabled: false
+      check_mode: true
+      register: arp_now
+
+    - name: ARP spoofing round trip
+      block:
+        - name: ARP spoofing protection flipped
+          workshop144.calix_exos.arp_spoofing:
+            <<: *exos
+            enabled: "{{ not arp_now.diff.before }}"
+          register: arp_flip
+
+        - name: ARP spoofing protection flipped again changes nothing
+          workshop144.calix_exos.arp_spoofing:
+            <<: *exos
+            enabled: "{{ not arp_now.diff.before }}"
+          register: arp_again
+
+        - name: ARP spoofing changed once
+          ansible.builtin.assert:
+            that: arp_flip is changed and arp_again is not changed
+      always:
+        - name: ARP spoofing protection back as it was
+          workshop144.calix_exos.arp_spoofing:
+            <<: *exos
+            enabled: "{{ arp_now.diff.before }}"
+          register: arp_back
+
+    - name: ARP spoofing was restored by a real change
+      ansible.builtin.assert:
+        that: arp_back is changed and arp_back.enabled == arp_now.diff.before
+
+    # ------------------------------------------------------------------ controls
+    - name: Controls as they are now
+      workshop144.calix_exos.controls:
+        <<: *exos
+        sip_alg: false
+      check_mode: true
+      register: controls_now
+
+    - name: Controls round trip
+      block:
+        - name: SIP ALG flipped
+          workshop144.calix_exos.controls:
+            <<: *exos
+            sip_alg: "{{ not controls_now.diff.before.sip_alg }}"
+          register: sip_flip
+
+        - name: LED flipped
+          workshop144.calix_exos.controls:
+            <<: *exos
+            led: "{{ not controls_now.diff.before.led }}"
+          register: led_flip
+
+        - name: LED back on at half brightness, where it can be dimmed
+          workshop144.calix_exos.controls:
+            <<: *exos
+            led: true
+            brightness: 50
+          register: led_dim
+          when: controls_now.diff.before.brightness is not none
+
+        - name: Same again changes nothing
+          workshop144.calix_exos.controls:
+            <<: *exos
+            led: true
+            brightness: 50
+          register: led_again
+          when: controls_now.diff.before.brightness is not none
+
+        - name: Controls changed as expected
+          ansible.builtin.assert:
+            that:
+              - sip_flip is changed
+              - led_flip is changed
+              - led_dim is skipped or (led_dim is changed and led_dim.controls.brightness == 50)
+              - led_again is skipped or led_again is not changed
+      always:
+        - name: Controls back as they were
+          workshop144.calix_exos.controls:
+            <<: *exos
+            led: "{{ controls_now.diff.before.led }}"
+            brightness: "{{ controls_was.brightness if (controls_was.led and controls_was.brightness is not none) else omit }}"
+            sip_alg: "{{ controls_now.diff.before.sip_alg }}"
+          vars:
+            controls_was: "{{ controls_now.diff.before }}"
+          register: controls_back
+
+    - name: Controls were restored
+      ansible.builtin.assert:
+        that: controls_back.controls == controls_now.diff.before
+        success_msg: "Settings modules passed on {{ exos_host }}."
