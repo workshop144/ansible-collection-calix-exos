@@ -254,6 +254,16 @@ def encrypt_secret(secret, first, nonce, second):
     return "".join("%02x" % (key[i % len(key)] ^ byte) for i, byte in enumerate(data))
 
 
+def decrypt_secret(cipher_hex, first, nonce, second):
+    """Undo :func:`encrypt_secret`. The router returns stored keys encrypted this way."""
+    key = hashlib.sha256(("%s:%s:%s" % (first, nonce, second)).encode("utf-8")).digest()
+    try:
+        data = bytes.fromhex(str(cipher_hex))
+    except ValueError:
+        raise ValueError("not an encrypted secret from the router") from None
+    return "".join(chr(key[i % len(key)] ^ byte) for i, byte in enumerate(data))
+
+
 def client_from_module(module):
     """Build a client from a module's shared connection options."""
     params = module.params

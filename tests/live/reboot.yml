@@ -1,0 +1,57 @@
+---
+# Live test of reboot. THE ROUTER RESTARTS: everything behind it is offline for a few minutes.
+- name: Reboot module against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exos: &exos
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+  tasks:
+    - name: The router to test must be named, with a password
+      ansible.builtin.assert:
+        that:
+          - exos_host is defined
+          - exos.password | length > 0
+
+    - name: Uptime before
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [system, dhcp_reservations, security]
+      register: boot_before
+
+    - name: Check mode does not restart it
+      workshop144.calix_exos.reboot:
+        <<: *exos
+      check_mode: true
+      register: boot_check
+
+    - name: Restart and wait
+      workshop144.calix_exos.reboot:
+        <<: *exos
+        timeout: 900
+      register: boot
+
+    - name: Uptime after, once the router's services answer
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [system, dhcp_reservations, security]
+      register: boot_after
+      retries: 20
+      delay: 10
+      until: boot_after is not failed
+
+    - name: Show the restart
+      ansible.builtin.debug:
+        msg: "uptime {{ boot_before.exos.system.uptime }} -> {{ boot_after.exos.system.uptime }}; waited {{ boot.waited_seconds }} s"
+
+    - name: The router restarted and kept its settings
+      ansible.builtin.assert:
+        that:
+          - boot_check is changed and not boot_check.rebooted
+          - boot is changed and boot.rebooted
+          - boot_after.exos.system.uptime is match('^0D 0H')
+          - boot_after.exos.dhcp_reservations == boot_before.exos.dhcp_reservations
+          - boot_after.exos.security == boot_before.exos.security
+        success_msg: "Reboot module passed on {{ exos_host }}."

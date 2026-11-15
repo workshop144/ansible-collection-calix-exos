@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosClient
 from ansible_collections.workshop144.calix_exos.tests.unit.fakes import FakeRouter
 
@@ -231,11 +233,115 @@ def _ipv6_lan(router, action, params):
     return ""
 
 
+def _xor(text_or_hex, ssid, nonce, auth, decrypt=False):
+    key = hashlib.sha256(("%s:%s:%s" % (ssid, nonce, auth)).encode()).digest()
+    if decrypt:
+        data = bytes.fromhex(text_or_hex)
+        return "".join(chr(key[i % 32] ^ b) for i, b in enumerate(data))
+    return "".join("%02x" % (key[i % 32] ^ ord(c)) for i, c in enumerate(text_or_hex))
+
+
+READ_NONCE = "ab" * 32
+
+
+def _wlinfo(router, action, params):
+    wifi = router.state["wifi"]
+    if action == "get_radio_setup":
+        return [dict(radio) for radio in wifi["radios"]]
+    if action == "get_pool_status":
+        return dict(wifi["pool"])
+    if action == "get_ssid_setup" and params.get("wlSsidUsage") == "primary":
+        p = wifi["primary"]
+        rows = []
+        for idx, band in ((1, "5"), (2, "2.4"), (3, "6")):
+            ssid = p["ssid"] if band != "6" else "reserved-6g"
+            auth = p["auth"] if band != "6" else "wpa3"
+            rows.append({"is6Supported": "0", "l2bridge": 0, "wlAPIsolation": 0, "wlAuthMode": auth, "wlBand": band,
+                         "wlEnbl": 1, "wlHidden": p["hidden"], "wlRadioEnbl": 1, "wlRadioIdx": idx, "wlSsid": ssid,
+                         "wlSsidIdx": 1, "nonce": READ_NONCE,
+                         "wlWpaPsk": _xor(p["key"], ssid, READ_NONCE, auth) if auth not in ("disabled", "owe") else ""})
+        return rows
+    if action == "get_ssid_setup":
+        rows = []
+        for net in wifi["secondary"]:
+            row = dict(net["row"])
+            row["nonce"] = READ_NONCE
+            row["wlWpaPsk"] = _xor(net["key"], row["wlSsid"], READ_NONCE, row["wlAuthMode"]) if net["key"] else ""
+            rows.append(row)
+        return rows
+    return ""
+
+
+def _multiplessid(router, action, params):
+    wifi = router.state["wifi"]
+    if router.drop_writes:
+        return ""
+    key = ""
+    if params.get("wlWpaPsk"):
+        key = _xor(params["wlWpaPsk"], params["wlSsid"], params["nonce"], params["wlAuthMode"], decrypt=True)
+    if "actiondo" not in params:                      # the primary network
+        wifi["primary"] = {"ssid": params["wlSsid"], "auth": params["wlAuthMode"], "hidden": int(params["wlHidden"]), "key": key}
+        return ""
+    do = str(params["actiondo"])
+    if do == "0":
+        wifi["secondary"] = [n for n in wifi["secondary"] if n["row"]["wlSsid"] != params["wlSsid"]]
+        return ""
+    row = {"bandFlag": -1, "is6Supported": "0", "networkType": params["networkType"], "smart_qos": int(params["smart_qos"]),
+           "wlAuthMode": params["wlAuthMode"], "wlDisblTime": params.get("wlDisblTime", ""), "wlEnbl": 1,
+           "wlEnblTime": params.get("wlEnblTime", ""), "wlEndIp": params.get("wlEndIp", ""), "wlGateway": params.get("wlGateway", ""),
+           "wlMask": params.get("wlMask", ""), "wlRadioIdx": 15, "wlSsid": params["wlSsid"], "wlSsidIdx": 3,
+           "wlStartIp": params.get("wlStartIp", ""), "wlSubnet": int(params["wlSubnet"])}
+    if do == "1":
+        if wifi["pool"]["ALL"] < 1:
+            return "#ERROR_165"
+        wifi["secondary"].append({"row": row, "key": key})
+    else:
+        for net in wifi["secondary"]:
+            if net["row"]["wlSsid"] == params["oldname"]:
+                net["row"], net["key"] = row, key
+    return ""
+
+
+def _radiosetup(router, action, params):
+    if not router.drop_writes:
+        by_band = {r["band"]: r for r in router.state["wifi"]["radios"]}
+        for sent in params:
+            if sent.get("band") in by_band:
+                by_band[sent["band"]].update({k: v for k, v in sent.items() if k != "band"})
+    return ""
+
+
+def _dhcpcfg(router, action, params):
+    if router.drop_writes:
+        return ""
+    store = router.state["params"]
+    store.update(dnsHostName=params["dnsHostName"], dnsDomainName=params["dnsDomainName"], enblDhcpSrv=str(params["enblDhcpSrv"]),
+                 ethIpAddress=params["dhcpServerIP"], ethSubnetMask=params["dhcpSubnetMask"])
+    if str(params["enblDhcpSrv"]) == "1":
+        custom = params["dnsType"] == "custom"
+        store.update(dhcpEthStart=params["dhcpEthStart"], dhcpEthEnd=params["dhcpEthEnd"], dnsType=params["dnsType"],
+                     dhcpLeasedTime=str(params["dhcpLeasedTime"]),
+                     dhcpPrimaryDNS=params["dnsPrimary"] if custom else "0.0.0.0",
+                     dhcpSecondaryDNS=params["dnsSecondary"] if custom else "0.0.0.0")
+    return ""
+
+
+def _reboot(router, action, params):
+    router.state["rebooted"] = True
+    router.logged_in = False
+    router.state["down_for"] = router.state.get("boot_polls", 2)
+    return ""
+
+
 def settings_router(**overrides):
     """A fake router with every simple setting in its usual state."""
     router = FakeRouter()
     router.state.update({
         "params": {"enblUpnp": "0", "enblUpnpnat": "0", "ethIpAddress": "192.0.2.1", "ethSubnetMask": "255.255.255.0",
+                   "dhcpEthStart": "192.0.2.100", "dhcpEthEnd": "192.0.2.249", "dhcpLeasedTime": "43200", "enblDhcpSrv": "1",
+                   "enblDhcpReservation": "0", "dnsType": "default", "dnsHostName": "router", "dnsDomainName": "home.example",
+                   "dhcpPrimaryDNS": "0.0.0.0", "dhcpSecondaryDNS": "0.0.0.0", "dhcpOptionTftpEn": "0",
+                   "dhcpOptionTftpOpt150": "", "dhcpOptionTftpOpt66": "",
                    "fwLevel": "High", "fwStealthMode": "1", "firewallVal": ""},
         "dmz": None,
         "forwards": [],
@@ -244,6 +350,20 @@ def settings_router(**overrides):
         "controls": {"sip": 0, "led": 1, "brightness": 100, "brightness_supported": 1},
         "chains": {"dsv4": [], "usv4": [], "dsv6": [], "usv6": []},
         "schedule_type": "ewi",
+        "wifi": {
+            "radios": [
+                {"160_80+80": "0", "802.11ax": "1", "band": "5G", "dfs": "1", "enable": "1", "is6Supported": "0", "mimo": "0",
+                 "psc_only": "0", "support_160": "0", "support_dfs": "1", "support_mimo": "1"},
+                {"802.11ax": "1", "band": "2.4G", "dfs": "0", "enable": "1", "is6Supported": "0", "mimo": "0", "psc_only": "0",
+                 "support_dfs": "0", "support_mimo": "1"},
+                {"160_80+80": "1", "802.11ax": "1", "afc_enable": 0, "band": "6G", "dfs": "0", "enable": "1",
+                 "is6Supported": "0", "isAfcSupported": 0, "mimo": "0", "psc_only": "1", "support_dfs": "0", "support_mimo": "1"},
+            ],
+            "pool": {"2G": 3, "2GIP": 23, "5G": 3, "5GIP": 13, "6G": 0, "6GIP": 33, "ALL": 3, "ALLIP": 13,
+                     "is6Supported": "0", "smartqos": 0, "wfh_enable": 0},
+            "primary": {"ssid": "example", "auth": "psk+psk2", "hidden": 0, "key": "correct horse battery"},
+            "secondary": [],
+        },
         "schedules": [],
         "svc_rules": {},
         "svc_assocs": [],
@@ -283,6 +403,12 @@ def settings_router(**overrides):
         "serviceBlockingAssociations.cmd": _svc_assocs,
         "serviceBlockingAssociation.cmd": _svc_assoc,
         "lan_setting_ipv6.cmd": _ipv6_lan,
+        "wlinfo.cmd": _wlinfo,
+        "wireless_multiplessid.wl": _multiplessid,
+        "wireless_radiosetup.wl": _radiosetup,
+        "dhcpcfg.cmd": _dhcpcfg,
+        "rebootinfo.cgi": _reboot,
+        "get_nonce.cmd": lambda router, action, params: "cd" * 32,
         "traceroute.cmd": _trace,
     })
     return router

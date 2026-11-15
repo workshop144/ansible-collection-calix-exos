@@ -96,6 +96,9 @@ class FakeRouter:
         return FakeResponse(self._dispatch(url, endpoint, action, params))
 
     def _dispatch(self, url, endpoint, action, params):
+        if endpoint == "login_nonce.cmd" and self.state.get("down_for", 0) > 0:
+            self.state["down_for"] -= 1
+            raise OSError("connection refused")
         if endpoint == "login_nonce.cmd":
             self._nonce_count += 1
             self._nonce = hashlib.sha256(str(self._nonce_count).encode()).hexdigest()
