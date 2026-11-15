@@ -5,9 +5,14 @@
 
 from __future__ import annotations
 
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import normalize_mac
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError, normalize_mac
 
 SUBSETS = ("system", "lan", "dhcp_reservations", "clients", "wifi", "security", "wan")
+
+LAN_PARAMS = ("ethIpAddress", "ethSubnetMask", "enblDhcpSrv", "dhcpEthStart", "dhcpEthEnd", "dhcpLeasedTime")
+SECURITY_PARAMS = ("enblUpnp", "enblUpnpnat", "fwLevel", "fwStealthMode")
+# Read with ejGetOtherVal: the router does not return these for ejGetVal.
+SECURITY_OTHER_PARAMS = ("dmzHost",)
 
 SYSTEM_ROWS = {
     "Model Number": "model",
@@ -46,6 +51,19 @@ def _ip_key(address):
         return (1, str(address))
 
 
+def _require(params, names):
+    """Fail rather than read a missing setting as off: the router answers an unknown name with {}."""
+    params = params if isinstance(params, dict) else {}
+    missing = [name for name in names if name not in params]
+    if missing:
+        raise ExosError(
+            "the router did not return %s; this firmware may name these settings differently"
+            % ", ".join(missing),
+            endpoint="cgi_parameter_value.cmd", action="get",
+        )
+    return params
+
+
 def _rows(raw, key=None):
     if key is not None:
         raw = raw.get(key) if isinstance(raw, dict) else None
@@ -62,7 +80,7 @@ def system(raw):
 
 
 def lan(params):
-    params = params if isinstance(params, dict) else {}
+    params = _require(params, LAN_PARAMS)
     return {
         "address": params.get("ethIpAddress"),
         "netmask": params.get("ethSubnetMask"),
@@ -73,12 +91,28 @@ def lan(params):
     }
 
 
-def reservations(raw):
-    out = [
+def reservation_table(raw):
+    """Return ``(reservations, pool names)``. Fails on anything that is not a reservation table,
+
+    so that an empty or broken reply is never mistaken for an empty table.
+    """
+    networks = raw.get("networks") if isinstance(raw, dict) else None
+    leases = raw.get("staticIpLease", []) if isinstance(raw, dict) else None
+    if not isinstance(networks, list) or not networks or not isinstance(leases, list):
+        raise ExosError(
+            "the router did not return a DHCP reservation table",
+            endpoint="dhcp_reservation.cmd", action="init",
+        )
+    entries = [
         {"pool": row.get("dhcpPool"), "mac": _mac(row.get("mac")), "ip": row.get("ip")}
-        for row in _rows(raw, "staticIpLease")
+        for row in _rows(leases)
     ]
-    return sorted(out, key=lambda entry: _ip_key(entry["ip"]))
+    pools = [row.get("dhcpPool") for row in _rows(networks)]
+    return sorted(entries, key=lambda entry: _ip_key(entry["ip"])), pools
+
+
+def reservations(raw):
+    return reservation_table(raw)[0]
 
 
 def clients(raw):
@@ -134,7 +168,7 @@ def wifi(status, ssids):
 
 
 def security(params, dmz, forwards):
-    params = params if isinstance(params, dict) else {}
+    params = _require(params, SECURITY_PARAMS + SECURITY_OTHER_PARAMS)
     if isinstance(forwards, dict):
         forwards = [forwards]
     return {
@@ -142,7 +176,8 @@ def security(params, dmz, forwards):
         "upnp_nat": _flag(params.get("enblUpnpnat")),
         "firewall_level": params.get("fwLevel"),
         "stealth_mode": _flag(params.get("fwStealthMode")),
-        "dmz_host": params.get("dmzHost") or None,
+        # scdmz.cmd is empty when no DMZ host is set; anything it does return is passed through.
+        "dmz_host": params.get("dmzHost") or dmz or None,
         "port_forwards": forwards if isinstance(forwards, list) else [],
     }
 

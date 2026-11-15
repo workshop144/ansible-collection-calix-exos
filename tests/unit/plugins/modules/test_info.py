@@ -60,3 +60,27 @@ def test_logs_out_on_error():
     with pytest.raises(ExosError):
         info.run({"gather_subset": ["all"]}, make(router))
     assert router.endpoints()[-1] == "logout.cgi"
+
+
+def test_unknown_parameter_reply_fails_instead_of_reading_as_off():
+    canned = replies.canned()
+    canned[("cgi_parameter_value.cmd", "get")] = "{ }"
+    router = FakeRouter(replies=canned)
+    with pytest.raises(ExosError):
+        info.run({"gather_subset": ["security"]}, make(router))
+
+
+def test_empty_reservation_reply_fails():
+    router = FakeRouter(replies=replies.canned())
+    router.fail_next("dhcp_reservation.cmd", "init", "")
+    with pytest.raises(ExosError):
+        info.run({"gather_subset": ["dhcp_reservations"]}, make(router))
+
+
+def test_dmz_host_is_asked_for_the_way_the_router_page_does():
+    # On the real router dmzHost is not returned for ejGetVal, only for ejGetOtherVal.
+    router = FakeRouter(replies=replies.canned())
+    info.run({"gather_subset": ["security"]}, make(router))
+    asked = [c[1] for c in router.calls if c[0] == "cgi_parameter_value.cmd"]
+    assert {"action": "get", "ejGetVal": "enblUpnp,enblUpnpnat,fwLevel,fwStealthMode"} in asked
+    assert {"action": "get", "ejGetOtherVal": "dmzHost"} in asked

@@ -9,8 +9,10 @@
   tasks:
     - name: The router to test must be named
       ansible.builtin.assert:
-        that: exos_host is defined
-        fail_msg: "Pass the router with -e exos_host=<address>."
+        that:
+          - exos_host is defined
+          - smoke_password | length > 0
+        fail_msg: "Pass the router with -e exos_host=<address> and set CALIX_EXOS_PASSWORD."
 
     - name: Read the router
       workshop144.calix_exos.info:
@@ -34,7 +36,7 @@
 
     - name: Pick the highest free address in the pool
       ansible.builtin.set_fact:
-        smoke_ip: "{{ smoke_candidates | difference(smoke_used) | last }}"
+        smoke_ip: "{{ smoke_candidates | reject('in', smoke_used) | last }}"
       vars:
         smoke_prefix: "{{ smoke_first.exos.lan.pool_end.split('.')[:3] | join('.') }}"
         smoke_low: "{{ smoke_first.exos.lan.pool_start.split('.')[3] | int }}"
@@ -100,3 +102,22 @@
             password: "{{ smoke_password }}"
             mac: "{{ smoke_mac }}"
             state: absent
+
+    - name: Read the router's login lockout counters
+      ansible.builtin.uri:
+        url: "https://{{ exos_host }}/get_access_status.cmd"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          Username: admin
+        validate_certs: false
+        use_proxy: false
+        return_content: true
+      register: smoke_access
+
+    - name: The logins above must not have counted as failures
+      ansible.builtin.assert:
+        that:
+          - (smoke_access.content | from_json).count | int == 0
+          - (smoke_access.content | from_json).locktime | int == 0
+        fail_msg: "Lockout counters are not zero: {{ smoke_access.content }}"

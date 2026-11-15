@@ -32,6 +32,8 @@ options:
   pool:
     description:
       - Name of the DHCP pool, as the router calls it. The primary LAN is V(lan).
+      - Used when O(state=present); the module fails if the router has no pool of this name.
+        Removal is by MAC address alone.
     type: str
     default: lan
   state:
@@ -79,6 +81,8 @@ reservation:
   sample: {"pool": "lan", "mac": "02:00:00:00:00:aa", "ip": "192.0.2.150"}
 """
 
+import ipaddress
+
 from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import normalize
@@ -115,8 +119,13 @@ def decide(current, mac, ip, pool, state):
     return "replace"
 
 
+def _table(client):
+    """Read the table. A reply that is not a table is an error, never an empty table."""
+    return normalize.reservation_table(client.call("dhcp_reservation.cmd", action="init"))
+
+
 def _read(client):
-    return normalize.reservations(client.call("dhcp_reservation.cmd", action="init"))
+    return _table(client)[0]
 
 
 def _add(client, entry):
@@ -136,21 +145,50 @@ def _remove(client, entry):
 
 
 def _replace(client, old, new):
-    _remove(client, old)
+    """Remove the old entry and add the new one.
+
+    Once the remove has been sent, any failure is settled by reading the table again and acting
+    on what is really there, so the outcome reported is the one on the router.
+    """
     try:
+        _remove(client, old)
         _add(client, new)
     except (ExosError, ReservationError) as err:
+        _settle(client, old, new, err)
+
+
+def _settle(client, old, new, cause):
+    """After a failed replace: return if the new entry is in place after all, otherwise raise."""
+    what = "could not reserve %s for %s (%s)" % (new["ip"], new["mac"], cause)
+    unknown = ReservationError(
+        "%s, and the table could not be read afterwards: the reservation for %s is in an unknown state"
+        % (what, new["mac"])
+    )
+    try:
+        now = _for_mac(_read(client), new["mac"])
+    except ExosError:
+        raise unknown from None
+    if now == new:
+        return
+    if now is None:
         try:
-            _add(client, old)
-        except (ExosError, ReservationError):
+            client.call(ENDPOINT, action="add", dhcpPool=old["pool"], mac=old["mac"], static_ip=old["ip"])
+        except ExosError:
+            pass
+        try:
+            now = _for_mac(_read(client), new["mac"])
+        except ExosError:
+            raise unknown from None
+        if now == old:
+            raise ReservationError("%s; the old reservation of %s was restored" % (what, old["ip"])) from None
+        if now is None:
             raise ReservationError(
-                "could not reserve %s for %s (%s), and the old reservation of %s could not be put back: "
-                "there is now no reservation for %s on the router" % (new["ip"], new["mac"], err, old["ip"], new["mac"])
+                "%s, and the old reservation of %s could not be put back: there is now no reservation for %s "
+                "on the router" % (what, old["ip"], new["mac"])
             ) from None
-        raise ReservationError(
-            "could not reserve %s for %s (%s); the old reservation of %s was restored"
-            % (new["ip"], new["mac"], err, old["ip"])
-        ) from None
+    if now == old:
+        raise ReservationError("%s; the old reservation of %s is still in place" % (what, old["ip"])) from None
+    raise ReservationError("%s; the router now lists %s for %s" % (what, now["ip"], new["mac"])) from None
 
 
 def run(params, client, check_mode):
@@ -160,12 +198,23 @@ def run(params, client, check_mode):
     except ValueError as err:
         raise ReservationError(str(err)) from None
     state = params["state"]
-    wanted = {"pool": params["pool"], "mac": mac, "ip": params["ip"]} if state == "present" else None
+    pool = params["pool"]
+    ip = None
+    if state == "present":
+        try:
+            ip = str(ipaddress.ip_address(str(params["ip"]).strip()))
+        except ValueError:
+            raise ReservationError("not an IP address: %r" % (params["ip"],)) from None
+    wanted = {"pool": pool, "mac": mac, "ip": ip} if state == "present" else None
 
     with client:
-        current = _read(client)
+        current, pools = _table(client)
+        if state == "present" and pool not in pools:
+            raise ReservationError(
+                "the router has no DHCP pool named %r (it has: %s)" % (pool, ", ".join(str(p) for p in pools))
+            )
         before = _for_mac(current, mac)
-        action = decide(current, mac, params["ip"], params["pool"], state)
+        action = decide(current, mac, ip, pool, state)
         if action != "none" and not check_mode:
             if action == "add":
                 _add(client, wanted)

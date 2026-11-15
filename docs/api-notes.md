@@ -56,9 +56,12 @@ A second login from another client did not end an existing browser session.
 | `portForwardingAssociations.cmd` | `action=readall` | empty when nothing is forwarded |
 | `status_connection.cmd` | `action=getStatus` | `connection`: `{wan, ipv4, ipv6}` each `{state, color}`; `gateway` |
 
-Parameter names known to work with `cgi_parameter_value.cmd`: `ethIpAddress`, `ethSubnetMask`,
-`enblDhcpSrv`, `dhcpEthStart`, `dhcpEthEnd`, `dhcpSubnetMask`, `dhcpLeasedTime`, `enblUpnp`,
-`enblUpnpnat`, `fwLevel`, `fwStealthMode`, `dmzHost`.
+Parameter names known to work with `ejGetVal`: `ethIpAddress`, `ethSubnetMask`, `enblDhcpSrv`,
+`dhcpEthStart`, `dhcpEthEnd`, `dhcpSubnetMask`, `dhcpLeasedTime`, `enblUpnp`, `enblUpnpnat`,
+`fwLevel`, `fwStealthMode`.
+
+Some names are returned only when asked for in a second field, `ejGetOtherVal`, which is how the
+admin page reads them: `dmzHost` is one (it is silently left out of an `ejGetVal` reply).
 
 ## Writes this collection uses
 

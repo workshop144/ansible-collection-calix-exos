@@ -98,6 +98,12 @@ exos:
       type: dict
       sample: {"upnp": false, "upnp_nat": false, "firewall_level": "High", "stealth_mode": true,
                "dmz_host": null, "port_forwards": []}
+      contains:
+        dmz_host:
+          description:
+            - Null when no DMZ host is set. Otherwise the host, or whatever the router returns for
+              its DMZ setting.
+          type: raw
     wan:
       description: WAN connection status as the router reports it.
       type: dict
@@ -113,8 +119,9 @@ from ansible_collections.workshop144.calix_exos.plugins.module_utils.client impo
     client_from_module,
 )
 
-LAN_PARAMS = "ethIpAddress,ethSubnetMask,enblDhcpSrv,dhcpEthStart,dhcpEthEnd,dhcpLeasedTime"
-SECURITY_PARAMS = "enblUpnp,enblUpnpnat,fwLevel,fwStealthMode,dmzHost"
+LAN_PARAMS = ",".join(normalize.LAN_PARAMS)
+SECURITY_PARAMS = ",".join(normalize.SECURITY_PARAMS)
+SECURITY_OTHER_PARAMS = ",".join(normalize.SECURITY_OTHER_PARAMS)
 
 
 def _system(client):
@@ -145,6 +152,8 @@ def _wifi(client):
 
 def _security(client):
     params = client.call("cgi_parameter_value.cmd", action="get", ejGetVal=SECURITY_PARAMS)
+    other = client.call("cgi_parameter_value.cmd", action="get", ejGetOtherVal=SECURITY_OTHER_PARAMS)
+    params = dict(params if isinstance(params, dict) else {}, **(other if isinstance(other, dict) else {}))
     dmz = client.call("scdmz.cmd", action="get")
     forwards = client.call("portForwardingAssociations.cmd", action="readall")
     return normalize.security(params, dmz, forwards)

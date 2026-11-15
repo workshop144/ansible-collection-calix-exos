@@ -41,11 +41,6 @@ def test_reservations_sorted_numerically_and_lower_case():
     ]
 
 
-def test_reservations_empty_reply():
-    assert normalize.reservations(None) == []
-    assert normalize.reservations({"networks": []}) == []
-
-
 def test_clients():
     assert normalize.clients(replies.DEVICE_TABLE) == [
         {"mac": "02:00:00:00:00:aa", "ip": "192.0.2.150", "name": "printer", "type": "Printer",
@@ -95,3 +90,50 @@ def test_security_on_values():
 def test_wan_is_the_connection_object():
     assert normalize.wan(replies.CONNECTION) == replies.CONNECTION["connection"]
     assert normalize.wan(None) == {}
+
+
+def test_lan_missing_name_raises():
+    import pytest
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
+    params = dict(replies.LAN_PARAMS)
+    del params["enblDhcpSrv"]
+    with pytest.raises(ExosError) as err:
+        normalize.lan(params)
+    assert "enblDhcpSrv" in str(err.value)
+    with pytest.raises(ExosError):
+        normalize.lan(None)
+
+
+def test_security_missing_name_raises():
+    import pytest
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
+    params = dict(replies.SECURITY_PARAMS)
+    del params["enblUpnp"]
+    with pytest.raises(ExosError) as err:
+        normalize.security(params, None, None)
+    assert "enblUpnp" in str(err.value)
+    with pytest.raises(ExosError):
+        normalize.security({}, None, None)
+
+
+def test_security_dmz_reply_is_not_ignored():
+    out = normalize.security(replies.SECURITY_PARAMS, {"host": "192.0.2.77"}, None)
+    assert out["dmz_host"] == {"host": "192.0.2.77"}
+
+
+def test_reservation_table_must_look_like_one():
+    import pytest
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
+    for bad in (None, {}, {"foo": 1}, [], {"networks": [], "staticIpLease": "x"}):
+        with pytest.raises(ExosError):
+            normalize.reservation_table(bad)
+
+
+def test_reservation_table_without_lease_key_is_empty():
+    entries, pools = normalize.reservation_table({"networks": [{"dhcpPool": "lan"}]})
+    assert entries == [] and pools == ["lan"]
+
+
+def test_reservation_table_returns_entries_and_pools():
+    entries, pools = normalize.reservation_table(replies.RESERVATIONS)
+    assert len(entries) == 3 and pools == ["lan"]

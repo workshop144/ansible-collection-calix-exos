@@ -138,3 +138,36 @@ def test_normalize_mac(raw):
 def test_normalize_mac_rejects_bad(raw):
     with pytest.raises(ValueError):
         normalize_mac(raw)
+
+
+def test_empty_password_fails_before_any_request():
+    router = FakeRouter()
+    with pytest.raises(ExosError) as err:
+        ExosClient(HOST, "admin", "", request=router).login()
+    assert router.calls == []
+    assert "password" in str(err.value)
+
+
+def test_broken_http_reply_is_exoserror():
+    import http.client
+    router = FakeRouter()
+    client = logged_in(router)
+    router.fail_next("x.cmd", "get", http.client.IncompleteRead(b""))
+    with pytest.raises(ExosError) as err:
+        client.call("x.cmd", action="get")
+    assert HOST in str(err.value)
+
+
+def test_logout_swallows_broken_http_reply():
+    import http.client
+    router = FakeRouter()
+    client = logged_in(router)
+    router.fail_next("logout.cgi", None, http.client.BadStatusLine(""))
+    client.logout()
+
+
+def test_refused_login_message_carries_http_status():
+    router = FakeRouter(password="right")
+    with pytest.raises(ExosAuthError) as err:
+        ExosClient(HOST, "admin", "wrong", request=router).login()
+    assert "HTTP 401" in str(err.value)

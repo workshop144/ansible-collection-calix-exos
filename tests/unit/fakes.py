@@ -42,7 +42,10 @@ class FakeRouter:
         self._failures = {}
 
     def fail_next(self, endpoint, action, failure):
-        """Make the next matching request return ``failure`` (a body) or raise it (an exception)."""
+        """Make the next matching request return ``failure`` (a body) or raise it (an exception).
+
+        Calls queue up: ``None`` lets one matching request through untouched.
+        """
         self._failures.setdefault((endpoint, action), []).append(failure)
 
     def writes(self):
@@ -64,7 +67,8 @@ class FakeRouter:
             failure = queued.pop(0)
             if isinstance(failure, BaseException):
                 raise failure
-            return FakeResponse(failure)
+            if failure is not None:
+                return FakeResponse(failure)
 
         return FakeResponse(self._dispatch(url, endpoint, action, params))
 

@@ -9,6 +9,7 @@ Unofficial. See docs/api-notes.md in the collection for what is known about the 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 from http.cookiejar import CookieJar
@@ -65,7 +66,12 @@ class ExosClient:
         self.username = username
         self._password = password
         self.base_url = "https://%s" % host
-        self._request = request or Request(validate_certs=validate_certs, timeout=timeout, cookies=CookieJar())
+        # No proxy (the router is on the local network) and no redirects (a redirect is never a
+        # normal reply here, and following one would hide a refused login).
+        self._request = request or Request(
+            validate_certs=validate_certs, timeout=timeout, cookies=CookieJar(),
+            use_proxy=False, follow_redirects="none",
+        )
         self._headers = {
             "Content-Type": "application/x-www-form-urlencoded;charset=utf-8;",
             "Origin": self.base_url,
@@ -90,14 +96,19 @@ class ExosClient:
             return response.read().decode("utf-8", "replace")
         except HTTPError:
             raise
-        except (OSError, ValueError) as err:
-            reason = getattr(err, "reason", None) or err
+        except (OSError, ValueError, http.client.HTTPException) as err:
+            reason = getattr(err, "reason", None) or err or type(err).__name__
             raise ExosError(
                 "cannot reach %s (%s): %s" % (self.host, endpoint, reason), endpoint=endpoint, action=action
             ) from None
 
     def login(self):
         """Log in once. A refusal is never retried: the router locks the account after repeats."""
+        if not self._password:
+            raise ExosError(
+                "no password given for %s (set the password option or CALIX_EXOS_PASSWORD)" % self.host,
+                endpoint="login.cgi",
+            )
         try:
             nonce = self._post("login_nonce.cmd").strip()
         except HTTPError as err:
@@ -112,11 +123,11 @@ class ExosClient:
         auth = hashlib.sha256(("%s:%s:%s" % (self.username, nonce, self._password)).encode("utf-8")).hexdigest()
         try:
             self._post("login.cgi", {"Username": self.username, "auth": auth, "nonce": nonce})
-        except HTTPError:
+        except HTTPError as err:
             status = self._access_status()
             raise ExosAuthError(
-                "login to %s as %s was refused (not retried); router access status: %s"
-                % (self.host, self.username, json.dumps(status, sort_keys=True)),
+                "login to %s as %s was refused (HTTP %s, not retried); router access status: %s"
+                % (self.host, self.username, err.code, json.dumps(status, sort_keys=True)),
                 access_status=status,
             ) from None
 

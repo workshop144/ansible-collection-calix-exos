@@ -168,3 +168,66 @@ def test_diff_before_after():
         "before": OLD, "after": {"pool": "lan", "mac": AA, "ip": "192.0.2.160"}}
     assert go(FakeRouter(leases=LEASES), BB, "192.0.2.151")["diff"]["before"] is None
     assert go(FakeRouter(leases=LEASES), AA, state="absent")["diff"] == {"before": OLD, "after": None}
+
+
+NEW = {"dhcpPool": "lan", "ip": "192.0.2.160", "mac": AA}
+INIT = ("dhcp_reservation.cmd", "init")
+
+
+@pytest.mark.parametrize("body", ["", '{"foo": 1}', "[]"])
+def test_bad_table_read_fails_without_writing(body):
+    router = FakeRouter(leases=LEASES)
+    router.fail_next(*INIT, body)
+    with pytest.raises(ExosError):
+        go(router, BB, "192.0.2.151")
+    assert router.writes() == []
+
+
+def test_unknown_pool_fails_without_writing():
+    router = FakeRouter(leases=LEASES)
+    with pytest.raises(ReservationError) as err:
+        go(router, BB, "192.0.2.151", pool="Primary")
+    assert "lan" in str(err.value)
+    assert router.writes() == []
+
+
+def test_ip_is_canonicalised_and_bad_ip_fails_before_login():
+    router = FakeRouter(leases=LEASES)
+    assert go(router, AA, " 192.0.2.150 ")["changed"] is False
+    for bad in ("192.0.2.0150", "192.0.2", "nope"):
+        router = FakeRouter(leases=LEASES)
+        with pytest.raises(ReservationError):
+            go(router, AA, bad)
+        assert router.calls == []
+
+
+def test_replace_unreadable_table_after_remove_puts_old_entry_back():
+    router = FakeRouter(leases=LEASES)
+    router.fail_next(*INIT, None)           # the first read is fine
+    router.fail_next(*INIT, "<html>junk")   # the read-back after the remove is not
+    with pytest.raises(ReservationError) as err:
+        go(router, AA, "192.0.2.160")
+    assert router.leases == LEASES
+    assert "restored" in str(err.value)
+
+
+def test_replace_unreadable_readback_after_add_does_not_duplicate():
+    router = FakeRouter(leases=LEASES)
+    router.fail_next(*INIT, None)                       # first read
+    router.fail_next(*INIT, None)                       # read-back after remove
+    router.fail_next(*INIT, TimeoutError("timed out"))  # read-back after add
+    result = go(router, AA, "192.0.2.160")
+    assert router.leases == [NEW]
+    assert result["changed"] is True
+    assert result["reservation"]["ip"] == "192.0.2.160"
+
+
+def test_replace_reports_unknown_state_when_nothing_can_be_read():
+    router = FakeRouter(leases=LEASES)
+    router.fail_next(*INIT, None)
+    router.fail_next(*INIT, TimeoutError("timed out"))
+    router.fail_next(*INIT, TimeoutError("timed out"))
+    with pytest.raises(ReservationError) as err:
+        go(router, AA, "192.0.2.160")
+    assert "unknown" in str(err.value)
+    assert [w[1]["action"] for w in router.writes()] == ["remove"]
