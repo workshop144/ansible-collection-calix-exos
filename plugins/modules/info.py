@@ -87,6 +87,8 @@ exos:
     wifi:
       description:
         - One entry per network name per band. No key material.
+        - The C(hidden) and C(isolation) keys are null when the router gives no setup details for
+          a network, and C(band) is null for a network it lists without a band or a status.
         - The C(wps) and C(wps_type) keys are null for a network the router does not report a
           status for.
       type: list

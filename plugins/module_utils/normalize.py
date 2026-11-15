@@ -130,30 +130,50 @@ def clients(raw):
 
 
 def _band(value):
-    text = str(value).strip()
+    text = str(value).strip() if value not in (None, "") else ""
+    if not text:
+        return None
     return text if text.lower().endswith("ghz") else text + "GHz"
 
 
+def _wps_type(value):
+    return None if str(value).strip().upper() in ("", "N/A", "NONE") else value
+
+
 def wifi(status, ssids):
-    """One entry per SSID per band. Key material in the setup rows is never copied."""
-    setup = {}
+    """One entry per SSID per band. Key material in the setup rows is never copied.
+
+    A setup row normally names its band. A guest network's row may not: it then applies to that
+    SSID on every band the router reports a status for.
+    """
+    by_band = {}
+    any_band = {}
     for row in _rows(ssids):
-        setup.setdefault((_band(row.get("wlBand")), row.get("wlSsid")), row)
+        band = _band(row.get("wlBand"))
+        if band is None:
+            any_band.setdefault(row.get("wlSsid"), row)
+        else:
+            by_band.setdefault((band, row.get("wlSsid")), row)
+    used = set()
     out = []
     for row in _rows(status):
-        key = (_band(row.get("frequency")), row.get("ssid"))
-        match = setup.pop(key, None)
+        band, ssid = _band(row.get("frequency")), row.get("ssid")
+        match = by_band.pop((band, ssid), None)
+        if match is None and ssid in any_band:
+            match = any_band[ssid]
+            used.add(ssid)
         out.append({
-            "band": key[0],
-            "ssid": key[1],
+            "band": band,
+            "ssid": ssid,
             "enabled": _flag(row.get("state")),
-            "hidden": _flag(match.get("wlHidden")) if match else not _flag(row.get("broadcast")),
+            "hidden": _flag(match.get("wlHidden")) if match else None,
             "security": row.get("secureType"),
             "wps": _flag(row.get("wps")),
-            "wps_type": row.get("wpsType"),
+            "wps_type": _wps_type(row.get("wpsType")),
             "isolation": _flag(match.get("wlAPIsolation")) if match else None,
         })
-    for (band, ssid), row in setup.items():
+    leftover = list(by_band.items()) + [((None, ssid), row) for ssid, row in any_band.items() if ssid not in used]
+    for (band, ssid), row in leftover:
         out.append({
             "band": band,
             "ssid": ssid,

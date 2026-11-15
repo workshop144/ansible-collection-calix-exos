@@ -153,3 +153,36 @@ def test_security_dmz_on_keeps_the_host():
 def test_security_dmz_unrecognised_value_is_kept_as_is():
     out = normalize.security(dict(replies.SECURITY_PARAMS, dmzHost="1|"), None, None)
     assert out["dmz_host"] == "1|"
+
+
+GUEST_STATUS = [
+    dict(replies.WL_STATUS[0], ssid="example-guest", broadcast=0, secureType="wpa3-mixed", wps=0, wpsType="N/A"),
+    dict(replies.WL_STATUS[1], ssid="example-guest", broadcast=0, secureType="wpa3-mixed", wps=0, wpsType="N/A"),
+]
+# As seen on a router with a guest network: its setup row carries no band.
+GUEST_SETUP = {"wlSsid": "example-guest", "wlHidden": 0, "wlEnbl": 1, "wlAPIsolation": 1,
+               "wlAuthMode": "wpa3-mixed", "wlWpaPsk": "deadbeef"}
+
+
+def test_wifi_guest_setup_row_without_a_band_applies_to_each_band():
+    out = normalize.wifi(replies.WL_STATUS + GUEST_STATUS, replies.SSID_PRIMARY + [GUEST_SETUP])
+    guest = [row for row in out if row["ssid"] == "example-guest"]
+    assert [row["band"] for row in guest] == ["5GHz", "2.4GHz"]
+    assert all(row["isolation"] is True and row["hidden"] is False for row in guest)
+    assert not [row for row in out if row["band"] in (None, "NoneGHz")]
+
+
+def test_wifi_hidden_is_unknown_without_a_setup_row():
+    out = normalize.wifi(GUEST_STATUS, [])
+    assert out[0]["hidden"] is None and out[0]["isolation"] is None
+
+
+def test_wifi_wps_type_not_applicable_is_none():
+    out = normalize.wifi(GUEST_STATUS, [GUEST_SETUP])
+    assert out[0]["wps"] is False and out[0]["wps_type"] is None
+
+
+def test_wifi_bandless_setup_row_with_no_status_is_listed_once_without_a_band():
+    out = normalize.wifi([], [GUEST_SETUP])
+    assert out == [{"band": None, "ssid": "example-guest", "enabled": True, "hidden": False,
+                    "security": "wpa3-mixed", "wps": None, "wps_type": None, "isolation": True}]
