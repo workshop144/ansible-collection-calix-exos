@@ -217,6 +217,20 @@ class ExosClient:
         body, where, action = self._exchange(endpoint, payload, as_json=True)
         return self._parse(body, self.host, where, endpoint, action)
 
+    def download(self, path):
+        """GET a file from the router and return its bytes."""
+        try:
+            data = self._request.get("%s/%s" % (self.base_url, path), headers={"Referer": self.base_url + "/"}).read()
+        except HTTPError as err:
+            raise ExosError("HTTP %s from %s for %s" % (err.code, self.host, path), endpoint=path) from None
+        except (OSError, ValueError, http.client.HTTPException) as err:
+            reason = getattr(err, "reason", None) or err or type(err).__name__
+            raise ExosError("cannot reach %s (%s): %s" % (self.host, path, reason), endpoint=path) from None
+        head = data[:400].decode("utf-8", "replace")
+        if LOGIN_PAGE_MARKER in head or head.lstrip().lower().startswith("<!doctype html"):
+            raise ExosError("no session on %s: it answered %s with its login page" % (self.host, path), endpoint=path)
+        return data
+
     def nonce(self):
         """A fresh nonce for a write that carries an encrypted secret."""
         value = self.call_text("get_nonce.cmd").strip()

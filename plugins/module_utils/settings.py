@@ -177,3 +177,57 @@ def read_controls(client):
         "brightness": int(brightness) if dimmable and brightness is not None else None,
         "sip_alg": flag(reply["sip"]),
     }
+
+
+# ---- firewall level
+
+FIREWALL_LEVELS = {"Basic": "off", "Low": "low", "Medium": "medium", "High": "high"}
+
+
+def read_firewall(client):
+    reply = params(client, names=("fwLevel", "fwStealthMode"))
+    level = FIREWALL_LEVELS.get(str(reply["fwLevel"]))
+    if level is None:
+        raise ExosError("the router reports a firewall level this collection does not know: %r" % (reply["fwLevel"],),
+                        endpoint=PARAMS, action="get")
+    return {"level": level, "stealth_mode": flag(reply["fwStealthMode"])}
+
+
+# ---- custom firewall rules (the Advanced Firewall page)
+
+CHAINS = {"ipv4_in": "dsv4", "ipv4_out": "usv4", "ipv6_in": "dsv6", "ipv6_out": "usv6"}
+RULE_PROTOCOLS = {"tcp": "tcp", "udp": "udp", "both": "tcpudp"}
+
+
+def read_chain(client, chain):
+    """The raw rule list of one chain, in match order."""
+    wire = CHAINS[chain]
+    reply = client.call_json("advfw_load.cmd", [wire])
+    rules = reply.get(wire) if isinstance(reply, dict) else None
+    if not isinstance(rules, list):
+        raise ExosError("the router did not return the %s firewall chain" % chain, endpoint="advfw_load.cmd")
+    return [dict(rule) for rule in rules if isinstance(rule, dict)]
+
+
+def public_firewall_rule(chain, raw):
+    protocols = {wire: name for name, wire in RULE_PROTOCOLS.items()}
+    return {
+        "chain": chain,
+        "name": raw.get("name"),
+        "source": raw.get("srcip") or None,
+        "destination": raw.get("dstip") or None,
+        "protocol": protocols.get(str(raw.get("proto", "")).lower(), raw.get("proto")),
+        "source_port": raw.get("sport") or None,
+        "destination_port": raw.get("dport") or None,
+        "action": str(raw.get("action", "")).lower(),
+    }
+
+
+# ---- known devices
+
+def read_devices(client):
+    reply = client.call("device_table.cmd", action="get")
+    rows = reply.get("ipv4") if isinstance(reply, dict) else reply
+    if not isinstance(rows, list):
+        raise ExosError("the router did not return its device table", endpoint="device_table.cmd", action="get")
+    return [row for row in rows if isinstance(row, dict)]

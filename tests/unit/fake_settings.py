@@ -105,17 +105,87 @@ def _controls(router, action, params):
     return ""
 
 
+def _firewall(router, action, params):
+    if not router.drop_writes:
+        router.state["params"].update(
+            fwLevel=params["fwLevel"], fwStealthMode=str(params["fwStealthMode"]), firewallVal=params["firewallInfo"] + "|"
+        )
+    return ""
+
+
+def _advfw_load(router, action, params):
+    return {params[0]: [dict(rule) for rule in router.state["chains"].get(params[0], [])]}
+
+
+def _advfw_apply(router, action, params):
+    if not router.drop_writes:
+        for chain, rules in params.items():
+            router.state["chains"][chain] = [dict(rule) for rule in rules]
+    return ""
+
+
+def _devices(router, action, params):
+    if action == "get":
+        return {"ipv4": [dict(row) for row in router.state["devices"]], "ipv6": [], "active_count": {"lan": 1}}
+    if action == "set" and not router.drop_writes:
+        for row in router.state["devices"]:
+            if row["macAddress"].lower() == params["mac"].lower():
+                row["deviceName"], row["type"] = params["deviceName"], params["type"]
+    return ""
+
+
+def _ping(router, action, params):
+    job = router.state["ping"]
+    if action == "start_ping":
+        if job.get("busy"):
+            return "#ERROR_049"
+        job.update(polls=0, request=dict(params))
+        return ""
+    job["polls"] = job.get("polls", 0) + 1
+    if "request" not in job:
+        return {"status": 0, "result": [], "statistic": {"sent": 0, "receive": 0, "loss": "0%", "min": "--ms", "max": "--ms", "avg": "--ms"}}
+    if job["polls"] < 3:
+        return {"status": 1, "result": [], "statistic": {}}
+    return job["final"]
+
+
+def _trace(router, action, params):
+    job = router.state["trace"]
+    if action == "trace":
+        job.update(polls=0, request=dict(params))
+        return ""
+    if action == "cancel":
+        job["cancelled"] = True
+        return ""
+    job["polls"] = job.get("polls", 0) + 1
+    if job["polls"] < 3:
+        return {"status": 1, "trace": []}
+    return job["final"]
+
+
 def settings_router(**overrides):
     """A fake router with every simple setting in its usual state."""
     router = FakeRouter()
     router.state.update({
-        "params": {"enblUpnp": "0", "enblUpnpnat": "0", "ethIpAddress": "192.0.2.1", "ethSubnetMask": "255.255.255.0"},
+        "params": {"enblUpnp": "0", "enblUpnpnat": "0", "ethIpAddress": "192.0.2.1", "ethSubnetMask": "255.255.255.0",
+                   "fwLevel": "High", "fwStealthMode": "1", "firewallVal": ""},
         "dmz": None,
         "forwards": [],
         "dns": [],
         "arp": "0",
         "controls": {"sip": 0, "led": 1, "brightness": 100, "brightness_supported": 1},
-        "read_endpoints": (),
+        "chains": {"dsv4": [], "usv4": [], "dsv6": [], "usv6": []},
+        "devices": [{"dhcpPool": "lan", "macAddress": "02:00:00:00:00:aa", "ipAddress": "192.0.2.150",
+                     "interfaceType": "Ethernet", "isActive": 1, "deviceName": "printer", "type": "Printer",
+                     "fingerPrint": {}}],
+        "ping": {"final": {"status": 2, "ip_addr": "192.0.2.9", "packet_size": "32", "source_ip": "", "version": "ipv4",
+                           "result": [{"from": "192.0.2.9", "bytes": "40", "time": "1.2ms", "ttl": "64"},
+                                      {"from": "192.0.2.9", "bytes": "40", "time": "0.9ms", "ttl": "64"}],
+                           "statistic": {"sent": 4, "receive": 4, "loss": "0%", "min": "0.9ms", "max": "1.2ms", "avg": "1.0ms"}}},
+        "trace": {"final": {"status": 0, "ip_addr": "192.0.2.9", "mode": "icmp", "reverse_dns": "disabled", "version": "ipv4",
+                            "trace": [{"hops": "1  192.0.2.1", "time1": "0.5 ms", "time2": "0.4 ms", "time3": "0.4 ms"},
+                                      {"hops": "2  192.0.2.9", "time1": "1.5 ms", "time2": "1.4 ms", "time3": "1.4 ms"}]}},
+        "read_endpoints": ("advfw_load.cmd",),
     })
     router.state.update(overrides)
     router.handlers.update({
@@ -127,6 +197,12 @@ def settings_router(**overrides):
         "dns_host_mapping.cmd": _dns,
         "arp_spoof.cmd": _arp,
         "advanced_controls.cmd": _controls,
+        "advanced_firewallsettings.cmd": _firewall,
+        "advfw_load.cmd": _advfw_load,
+        "advfw_apply.cmd": _advfw_apply,
+        "device_table.cmd": _devices,
+        "ping_test.cmd": _ping,
+        "traceroute.cmd": _trace,
     })
     return router
 

@@ -1,0 +1,245 @@
+---
+# Live test of firewall, firewall_rule, device, ping, traceroute and backup. Changes are put back.
+- name: Firewall and tool modules against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exos: &exos
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+    live_rule: exos-live-test
+  tasks:
+    - name: The router to test must be named, with a password
+      ansible.builtin.assert:
+        that:
+          - exos_host is defined
+          - exos.password | length > 0
+
+    # ------------------------------------------------------------------ firewall
+    - name: Firewall as it is now
+      workshop144.calix_exos.firewall:
+        <<: *exos
+        stealth_mode: true
+      check_mode: true
+      register: fw_now
+
+    - name: Firewall round trip
+      block:
+        - name: Another level
+          workshop144.calix_exos.firewall:
+            <<: *exos
+            level: "{{ 'medium' if fw_now.diff.before.level != 'medium' else 'high' }}"
+          register: fw_level
+
+        - name: Same level again changes nothing
+          workshop144.calix_exos.firewall:
+            <<: *exos
+            level: "{{ fw_level.firewall.level }}"
+          register: fw_level_again
+
+        - name: Stealth mode flipped
+          workshop144.calix_exos.firewall:
+            <<: *exos
+            stealth_mode: "{{ not fw_now.diff.before.stealth_mode }}"
+          register: fw_stealth
+
+        - name: The info module sees the new level and stealth mode
+          workshop144.calix_exos.info:
+            <<: *exos
+            gather_subset: [security]
+          register: fw_info
+
+        - name: Firewall changed as expected and is visible
+          ansible.builtin.assert:
+            that:
+              - fw_level is changed
+              - fw_level_again is not changed
+              - fw_stealth is changed
+              - fw_info.exos.security.firewall_level | lower == fw_level.firewall.level
+              - fw_info.exos.security.stealth_mode == (not fw_now.diff.before.stealth_mode)
+      always:
+        - name: Firewall back as it was
+          workshop144.calix_exos.firewall:
+            <<: *exos
+            level: "{{ fw_now.diff.before.level }}"
+            stealth_mode: "{{ fw_now.diff.before.stealth_mode }}"
+          register: fw_back
+
+    - name: Firewall was restored by a real change
+      ansible.builtin.assert:
+        that: fw_back is changed and fw_back.firewall == fw_now.diff.before
+
+    # ------------------------------------------------------------------ firewall_rule
+    - name: Custom firewall rule round trip
+      block:
+        - name: Rule added
+          workshop144.calix_exos.firewall_rule:
+            <<: *exos
+            chain: ipv4_out
+            name: "{{ live_rule }}"
+            destination: 198.51.100.1
+            protocol: tcp
+            destination_port: "9"
+            action: drop
+          register: rule_add
+
+        - name: Rule added again changes nothing
+          workshop144.calix_exos.firewall_rule:
+            <<: *exos
+            chain: ipv4_out
+            name: "{{ live_rule }}"
+            destination: 198.51.100.1
+            protocol: tcp
+            destination_port: "9"
+            action: drop
+          register: rule_again
+
+        - name: Rule changed to a range of ports, both protocols
+          workshop144.calix_exos.firewall_rule:
+            <<: *exos
+            chain: ipv4_out
+            name: "{{ live_rule }}"
+            destination: 198.51.100.0/24
+            protocol: both
+            destination_port: "9:19"
+            action: drop
+          register: rule_change
+
+        - name: Custom rule changed as expected
+          ansible.builtin.assert:
+            that:
+              - rule_add is changed
+              - rule_again is not changed
+              - rule_change is changed
+              - rule_change.rule.destination_port == '9:19'
+      always:
+        - name: Rule removed
+          workshop144.calix_exos.firewall_rule:
+            <<: *exos
+            chain: ipv4_out
+            name: "{{ live_rule }}"
+            state: absent
+          register: rule_remove
+
+    - name: Rule removed again changes nothing
+      workshop144.calix_exos.firewall_rule:
+        <<: *exos
+        chain: ipv4_out
+        name: "{{ live_rule }}"
+        state: absent
+      register: rule_gone
+
+    - name: Custom rule was removed by a real change
+      ansible.builtin.assert:
+        that: rule_remove is changed and rule_gone is not changed
+
+    # ------------------------------------------------------------------ device
+    - name: Read the devices
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [clients, lan]
+      register: dev_info
+
+    - name: Device name round trip, on the first device the router lists
+      vars:
+        dev_one: "{{ dev_info.exos.clients | first }}"
+      block:
+        - name: Device renamed
+          workshop144.calix_exos.device:
+            <<: *exos
+            mac: "{{ dev_one.mac }}"
+            name: exos-live-test
+          register: dev_rename
+
+        - name: Device renamed again changes nothing
+          workshop144.calix_exos.device:
+            <<: *exos
+            mac: "{{ dev_one.mac }}"
+            name: exos-live-test
+          register: dev_again
+
+        - name: Device renamed once
+          ansible.builtin.assert:
+            that: dev_rename is changed and dev_again is not changed and dev_rename.diff.before.name == dev_one.name
+      always:
+        - name: Device name and kind back as they were
+          workshop144.calix_exos.device:
+            <<: *exos
+            mac: "{{ dev_one.mac }}"
+            name: "{{ dev_one.name }}"
+            type: "{{ dev_one.type }}"
+          register: dev_back
+
+    - name: Device was restored by a real change
+      ansible.builtin.assert:
+        that: dev_back is changed
+
+    # ------------------------------------------------------------------ ping, traceroute
+    - name: Ping the router's own LAN address from the router
+      workshop144.calix_exos.ping:
+        <<: *exos
+        target: "{{ dev_info.exos.lan.address }}"
+      register: ping_self
+
+    - name: Ping an address that cannot answer
+      workshop144.calix_exos.ping:
+        <<: *exos
+        target: 192.0.2.1
+        wait: 40
+      register: ping_none
+
+    - name: Traceroute to the router's own LAN address
+      workshop144.calix_exos.traceroute:
+        <<: *exos
+        target: "{{ dev_info.exos.lan.address }}"
+      register: trace_self
+
+    - name: Show what the tools returned
+      ansible.builtin.debug:
+        msg:
+          ping: "{{ ping_self.ping | combine({'replies': ping_self.ping.replies | length}) }}"
+          ping_none: "{{ ping_none.ping | combine({'replies': ping_none.ping.replies | length}) }}"
+          hops: "{{ trace_self.hops }}"
+
+    - name: The tools reported sensibly
+      ansible.builtin.assert:
+        that:
+          - ping_self.reachable and ping_self.ping.received > 0 and ping_self.ping.avg_ms is not none
+          - not ping_none.reachable
+          - trace_self.hops | length >= 1
+
+    # ------------------------------------------------------------------ backup
+    - name: A place for the backup
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: exos-live-
+      register: backup_dir
+
+    - name: Backup round trip
+      block:
+        - name: Backup downloaded
+          workshop144.calix_exos.backup:
+            <<: *exos
+            dest: "{{ backup_dir.path }}/router.conf"
+          register: backup_first
+
+        - name: Look at the file
+          ansible.builtin.stat:
+            path: "{{ backup_dir.path }}/router.conf"
+          register: backup_stat
+
+        - name: Backup is a private file with the router's header
+          ansible.builtin.assert:
+            that:
+              - backup_first is changed
+              - backup_first.backup.size > 1000
+              - backup_first.backup.model | length > 0
+              - backup_stat.stat.mode == '0600'
+              - backup_stat.stat.size == backup_first.backup.size
+            success_msg: "Firewall and tool modules passed on {{ exos_host }} ({{ backup_first.backup.model }})."
+      always:
+        - name: Remove the backup
+          ansible.builtin.file:
+            path: "{{ backup_dir.path }}"
+            state: absent
