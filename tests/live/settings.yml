@@ -208,6 +208,9 @@
           register: dns_dig
           changed_when: false
           failed_when: false   # the router's DNS port may not be reachable from where the test runs
+          retries: 8           # its DNS server restarts after a change
+          delay: 3
+          until: "'192.0.2.77' in dns_dig.stdout"
 
         - name: DNS name moved to another address is a replacement
           workshop144.calix_exos.dns_host_mapping:
