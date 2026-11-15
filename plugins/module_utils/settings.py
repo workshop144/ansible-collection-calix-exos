@@ -231,3 +231,91 @@ def read_devices(client):
     if not isinstance(rows, list):
         raise ExosError("the router did not return its device table", endpoint="device_table.cmd", action="get")
     return [row for row in rows if isinstance(row, dict)]
+
+
+# ---- parental controls
+
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def require_local_parental_controls(client):
+    """The router refuses these pages when the provider's app manages parental controls."""
+    reply = client.call("apps_status.cmd")
+    kind = reply.get("scheduleType") if isinstance(reply, dict) else None
+    if kind != "ewi":
+        raise ExosModuleError(
+            "parental controls on this router are managed by the provider's app (schedule type %r), "
+            "so the router's own page, and this module, cannot change them" % (kind,)
+        )
+
+
+def read_access_schedules(client):
+    """Times at which a device is cut off from the internet. No days means always."""
+    text = str(params(client, other=("scheduleAccessList",))["scheduleAccessList"] or "")
+    out = []
+    for record in [r for r in text.split("|") if r.strip()]:
+        fields = record.split("/")
+        if len(fields) != 5:
+            raise ExosError("unexpected access schedule record from the router: %r" % record[:80], endpoint=PARAMS, action="get")
+        days = sorted({d.strip().lower()[:3] for d in fields[2].split(",") if d.strip()}, key=DAYS.index)
+        out.append({"_id": fields[0], "mac": fields[1].lower(), "days": days,
+                    "start": fields[3] or None, "end": fields[4] or None})
+    return out
+
+
+def _service_protocol(value):
+    text = str(value).strip().lower().replace("/", "")
+    return {"tcp": "tcp", "udp": "udp", "tcpudp": "both"}.get(text, text)
+
+
+def read_service_rules(client):
+    """Named sets of ports that can be blocked per device. ``custom`` is false for built-in sets."""
+    text = client.call_text("serviceBlockingRules.cmd", action="readall").strip()
+    rules = {}
+    for record in [r for r in text.split("|") if r.strip()]:
+        fields = record.split(",", 2)
+        if len(fields) != 3:
+            raise ExosError("unexpected service rule record from the router: %r" % record[:80],
+                            endpoint="serviceBlockingRules.cmd", action="readall")
+        ports = []
+        for entry in [e for e in fields[2].split(";") if e.strip()]:
+            parts = entry.split(":")
+            if len(parts) != 3:
+                raise ExosError("unexpected service rule entry from the router: %r" % entry[:80],
+                                endpoint="serviceBlockingRules.cmd", action="readall")
+            ports.append({"protocol": _service_protocol(parts[0]), "port": int(parts[1]), "port_end": int(parts[2])})
+        rules[fields[0]] = {"name": fields[0], "custom": flag(fields[1]), "ports": ports}
+    return rules
+
+
+def read_service_blocks(client):
+    text = client.call_text("serviceBlockingAssociations.cmd", action="readall").strip()
+    out = []
+    for record in [r for r in text.split("|") if r.strip()]:
+        fields = record.split(",", 1)
+        if len(fields) != 2:
+            raise ExosError("unexpected service blocking record from the router: %r" % record[:80],
+                            endpoint="serviceBlockingAssociations.cmd", action="readall")
+        out.append({"ip": fields[0], "rule": fields[1]})
+    return out
+
+
+# ---- IPv6 on the LAN
+
+def read_ipv6_lan_raw(client):
+    reply = client.call_json("lan_setting_ipv6.cmd", {"action": "load"})
+    reply = reply if isinstance(reply, dict) else {}
+    missing = [name for name in ("ra", "dhcpv6", "dhcpv6Mode", "dns6Type") if name not in reply]
+    if missing:
+        raise ExosError("the router did not return %s" % ", ".join(missing), endpoint="lan_setting_ipv6.cmd", action="load")
+    return reply
+
+
+def public_ipv6_lan(raw):
+    custom = raw.get("dns6Type") == "custom"
+    return {
+        "router_advertisement": raw["ra"] == "server",
+        "dhcpv6": raw["dhcpv6"] == "server",
+        "dhcpv6_mode": raw["dhcpv6Mode"],
+        "dns_servers": [value for value in (raw.get("advPriDns"), raw.get("advSecDns")) if value] if custom else [],
+    }

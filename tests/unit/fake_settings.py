@@ -31,6 +31,7 @@ def _params(router, action, params):
     store = dict(router.state["params"])
     dmz = router.state["dmz"]
     store["dmzHost"] = "1|%s" % dmz if dmz else "0|"
+    store["scheduleAccessList"] = "|".join("/".join(row) for row in router.state["schedules"])
     return {name: store[name] for name in wanted if name in store}
 
 
@@ -163,6 +164,71 @@ def _trace(router, action, params):
     return job["final"]
 
 
+def _apps(router, action, params):
+    return {"scheduleType": router.state["schedule_type"], "apps": [{"name": "CIES", "state": "RUNNING"}]}
+
+
+def _access(router, action, params):
+    table = router.state["schedules"]
+    if router.drop_writes:
+        return ""
+    if params["action"] == "add":
+        table.append((params["username"], params["mac"], params.get("days", ""), params.get("start_time", ""), params.get("end_time", "")))
+    elif params["action"] == "remove":
+        router.state["schedules"] = [row for row in table if row[0] != params["username"]]
+    return ""
+
+
+def _svc_rules(router, action, params):
+    return "|".join(
+        "%s,%s,%s" % (name, custom, ";".join(entries)) for name, (custom, entries) in router.state["svc_rules"].items()
+    )
+
+
+def _svc_rule(router, action, params):
+    rules = router.state["svc_rules"]
+    if router.drop_writes:
+        return ""
+    entry = "%s:%s:%s" % (params.get("protocol"), params.get("portStart"), params.get("portEnd"))
+    name = params.get("ruleName")
+    if action == "add":
+        rules.setdefault(name, ("1", []))[1].append(entry)
+    elif action == "remove":
+        if name in rules:
+            rules[name] = (rules[name][0], [e for e in rules[name][1] if e != entry])
+            if not rules[name][1]:
+                del rules[name]
+    return ""
+
+
+def _svc_assocs(router, action, params):
+    return "|".join("%s,%s" % pair for pair in router.state["svc_assocs"])
+
+
+def _svc_assoc(router, action, params):
+    pair = (params["ipAddress"], params["ruleName"])
+    if router.drop_writes:
+        return ""
+    if action == "add":
+        if pair[1] not in router.state["svc_rules"]:
+            return "#ERROR_019"
+        router.state["svc_assocs"].append(pair)
+    elif action == "remove":
+        router.state["svc_assocs"] = [p for p in router.state["svc_assocs"] if p != pair]
+    return ""
+
+
+def _ipv6_lan(router, action, params):
+    if params["action"] == "load":
+        return dict(router.state["ipv6_lan"])
+    if not router.drop_writes:
+        new = {key: value for key, value in params.items() if key != "action"}
+        new.setdefault("advPriDns", "")
+        new.setdefault("advSecDns", "")
+        router.state["ipv6_lan"] = new
+    return ""
+
+
 def settings_router(**overrides):
     """A fake router with every simple setting in its usual state."""
     router = FakeRouter()
@@ -175,6 +241,12 @@ def settings_router(**overrides):
         "arp": "0",
         "controls": {"sip": 0, "led": 1, "brightness": 100, "brightness_supported": 1},
         "chains": {"dsv4": [], "usv4": [], "dsv6": [], "usv6": []},
+        "schedule_type": "ewi",
+        "schedules": [],
+        "svc_rules": {},
+        "svc_assocs": [],
+        "ipv6_lan": {"ra": "server", "dhcpv6": "server", "dhcpv6Mode": "both", "dns6Type": "default",
+                     "advPriDns": "", "advSecDns": "", "somethingElse": "kept"},
         "devices": [{"dhcpPool": "lan", "macAddress": "02:00:00:00:00:aa", "ipAddress": "192.0.2.150",
                      "interfaceType": "Ethernet", "isActive": 1, "deviceName": "printer", "type": "Printer",
                      "fingerPrint": {}}],
@@ -185,7 +257,7 @@ def settings_router(**overrides):
         "trace": {"final": {"status": 0, "ip_addr": "192.0.2.9", "mode": "icmp", "reverse_dns": "disabled", "version": "ipv4",
                             "trace": [{"hops": "1  192.0.2.1", "time1": "0.5 ms", "time2": "0.4 ms", "time3": "0.4 ms"},
                                       {"hops": "2  192.0.2.9", "time1": "1.5 ms", "time2": "1.4 ms", "time3": "1.4 ms"}]}},
-        "read_endpoints": ("advfw_load.cmd",),
+        "read_endpoints": ("advfw_load.cmd", "apps_status.cmd"),
     })
     router.state.update(overrides)
     router.handlers.update({
@@ -202,6 +274,13 @@ def settings_router(**overrides):
         "advfw_apply.cmd": _advfw_apply,
         "device_table.cmd": _devices,
         "ping_test.cmd": _ping,
+        "apps_status.cmd": _apps,
+        "detail_access.cmd": _access,
+        "serviceBlockingRules.cmd": _svc_rules,
+        "serviceBlockingRule.cmd": _svc_rule,
+        "serviceBlockingAssociations.cmd": _svc_assocs,
+        "serviceBlockingAssociation.cmd": _svc_assoc,
+        "lan_setting_ipv6.cmd": _ipv6_lan,
         "traceroute.cmd": _trace,
     })
     return router
