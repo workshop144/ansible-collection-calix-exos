@@ -1,11 +1,11 @@
 ---
 namespace: workshop144
 name: calix_exos
-version: 0.1.1
+version: 0.2.0
 readme: README.md
 authors:
   - Workshop 144 <hello@workshop144.dev>
-description: Unofficial Ansible modules for Calix EXOS (GigaSpire) routers, using the router's local web API
+description: Unofficial Ansible modules for Calix EXOS (GigaSpire) routers, using the router's local web interface
 license:
   - GPL-3.0-or-later
 tags:

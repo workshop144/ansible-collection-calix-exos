@@ -226,7 +226,9 @@
               - dns_again is not changed
               - dns_move is changed
               - dns_dig.rc != 0 or '192.0.2.77' in dns_dig.stdout
-            success_msg: "DNS mapping ok; the router {{ 'answered with the mapped address' if '192.0.2.77' in dns_dig.stdout else 'could not be asked over DNS from here' }}."
+            success_msg: "DNS mapping ok; the router {{ dns_said }}."
+          vars:
+            dns_said: "{{ 'answered with the mapped address' if '192.0.2.77' in dns_dig.stdout else 'could not be asked over DNS from here' }}"
       always:
         - name: DNS name removed
           workshop144.calix_exos.dns_host_mapping:

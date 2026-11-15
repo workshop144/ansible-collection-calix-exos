@@ -12,13 +12,59 @@ can overwrite local changes at any time.
 
 ## What it does
 
+Every module supports check mode and diff, reads the setting back after changing it, and fails
+rather than guesses when the router's reply is not what it expects. A playbook run with
+`--check --diff` therefore reports drift without changing the router. Passwords and Wi-Fi keys
+are never returned.
+
+Each module below was run against real routers of both models: it changed the setting, checked
+it, and put it back. The playbooks that did so are in `tests/live/`.
+
 | Module | Purpose |
 |---|---|
-| `workshop144.calix_exos.info` | Read system, LAN, DHCP reservation, client, Wi-Fi, security and WAN state. Changes nothing. |
-| `workshop144.calix_exos.dhcp_reservation` | Add or remove one DHCP reservation. |
+| `info` | Read everything below, plus system, clients, Ethernet ports, WAN and internet status. Changes nothing. |
+| `dhcp` | DHCP server: on or off, pool, lease time, DNS servers, host and domain name; the LAN address with `force`. |
+| `dhcp_reservation` | One fixed address for a device. |
+| `dns_host_mapping` | One local DNS name. |
+| `ipv6_lan` | Router advertisement, DHCPv6 and IPv6 DNS servers on the LAN. |
+| `wifi_network` | The primary Wi-Fi network: name, security, key, hidden. |
+| `wifi_secondary_network` | Guest and other secondary Wi-Fi networks. |
+| `wifi_radio` | A radio: on or off, DFS, MU-MIMO, 802.11ax/be, wide channels. |
+| `upnp` | UPnP and UPnP NAT traversal. |
+| `firewall` | Firewall level and stealth mode. |
+| `firewall_rule` | One custom firewall rule (the Advanced Firewall page). |
+| `dmz` | The DMZ host. |
+| `port_forward` | One port forwarding rule. |
+| `arp_spoofing` | ARP spoofing protection. |
+| `access_schedule` | Cut a device off from the internet at set times. |
+| `service_blocking_rule`, `service_blocking` | Named sets of ports, and blocking one for a device. |
+| `controls` | Front LED and SIP ALG. |
+| `device` | The name and kind of a device in the router's list. |
+| `ping`, `traceroute` | Run the router's own ping and traceroute. |
+| `backup` | Download the configuration backup to a file. |
+| `reboot` | Restart the router and wait for it. |
 
-Both support check mode, so a playbook run with `--check --diff` reports drift without changing
-the router. Passwords and Wi-Fi keys are never returned.
+### What was not exercised on a real router
+
+- `wifi_network`: only its hidden flag was changed live. Changing the name, security or key goes
+  through the same request and is covered by unit tests, but it disconnects every device, so it
+  was not run against a network in use. The key encryption it uses was proven live by
+  `wifi_secondary_network`.
+- `dhcp`: only the lease time was changed live. A change of `lan_address` or `lan_netmask` moves
+  the router and was not run.
+- `wifi_radio`: only MU-MIMO on the 6 GHz radio was changed live.
+- `info`: the `ddns` part was read only with dynamic DNS off.
+
+### What is not covered, on purpose
+
+- Changing the admin password, restoring a backup, factory reset, firmware upload and the setup
+  wizard. A mistake in any of them can leave a router unreachable, and none can be tested and
+  undone.
+- Dynamic DNS and website blocking writes, and the time zone. They could not be tested: dynamic
+  DNS needs an account with a provider, the routers refuse website blocking while the provider's
+  security app runs, and the admin page has no time zone setting outside the setup wizard.
+- Anything only the provider's support login can reach (WAN and VLAN setup, TR-069, voice).
+- Wi-Fi channel, channel width and power: the admin page does not offer them.
 
 ## Install
 
@@ -28,7 +74,7 @@ In `requirements.yml`:
 collections:
   - name: https://github.com/workshop144/ansible-collection-calix-exos.git
     type: git
-    version: v0.1.1
+    version: v0.2.0
 ```
 
 then `ansible-galaxy collection install -r requirements.yml`. Needs ansible-core 2.17 or later
@@ -50,6 +96,11 @@ The modules run on the control node and talk HTTPS to the router, so use `connec
 Each task logs in, does its work and logs out. A failed login is never retried, because the
 router locks the account after repeated failures.
 
+Some changes disturb the network while the router applies them. Wi-Fi changes restart the
+radios, so devices can drop for some seconds; a DHCP change restarts the DHCP and DNS service;
+`reboot` takes everything offline for a few minutes. Each module's documentation says what to
+expect (`ansible-doc workshop144.calix_exos.<module>`).
+
 ## Examples
 
 ```yaml
@@ -69,6 +120,29 @@ router locks the account after repeated failures.
     password: "{{ router_password }}"
     mac: "02:00:00:00:00:aa"
     ip: 192.0.2.150
+
+- name: UPnP stays off
+  workshop144.calix_exos.upnp:
+    host: 192.0.2.1
+    password: "{{ router_password }}"
+    enabled: false
+
+- name: A guest network
+  workshop144.calix_exos.wifi_secondary_network:
+    host: 192.0.2.1
+    password: "{{ router_password }}"
+    ssid: guests
+    key: "{{ guest_wifi_key }}"
+```
+
+`module_defaults` saves repeating `host` and `password`:
+
+```yaml
+- hosts: localhost
+  module_defaults:
+    group/workshop144.calix_exos.all:
+      host: 192.0.2.1
+      password: "{{ router_password }}"
 ```
 
 ## Development

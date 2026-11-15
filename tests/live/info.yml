@@ -1,0 +1,41 @@
+---
+# Read-only: every subset of the info module against a real router.
+- name: Info module against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Read everything
+      workshop144.calix_exos.info:
+        host: "{{ exos_host }}"
+        password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+      register: everything
+
+    - name: Show the shape of what came back, without site details
+      ansible.builtin.debug:
+        msg:
+          subsets: "{{ everything.exos.keys() | sort }}"
+          model: "{{ everything.exos.system.model }} EXOS {{ everything.exos.system.version }}"
+          dhcp_keys: "{{ everything.exos.dhcp.keys() | sort }}"
+          radios: "{{ everything.exos.radios }}"
+          ports: "{{ everything.exos.ports }}"
+          firewall_rules: "{{ everything.exos.firewall_rules }}"
+          ddns: "{{ everything.exos.ddns }}"
+          arp_spoofing: "{{ everything.exos.arp_spoofing }}"
+          controls: "{{ everything.exos.controls }}"
+          ipv6_lan: "{{ everything.exos.ipv6_lan }}"
+          access_schedules: "{{ everything.exos.access_schedules }}"
+          service_blocking: "{{ everything.exos.service_blocking }}"
+          internet_sections: "{{ everything.exos.internet | dict2items | map(attribute='value') | map('length') | list }}"
+          internet_status: "{{ everything.exos.internet.status }}"
+
+    - name: Every subset came back and nothing changed
+      ansible.builtin.assert:
+        that:
+          - everything is not changed
+          - everything.exos | length == 19
+          - everything.exos.radios | length >= 2
+          - everything.exos.ports | length >= 1
+          - everything.exos.dhcp.lan_address == everything.exos.lan.address
+          - everything.exos.internet.ipv4 | length >= 1
+        success_msg: "Info module passed on {{ exos_host }}."
