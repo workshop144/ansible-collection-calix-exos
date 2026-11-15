@@ -181,7 +181,9 @@ def _access(router, action, params):
 
 def _svc_rules(router, action, params):
     return "|".join(
-        "%s,%s,%s" % (name, custom, ";".join(entries)) for name, (custom, entries) in router.state["svc_rules"].items()
+        # a real router writes each entry as PROTO:start:end:1
+        "%s,%s,%s" % (name, custom, ";".join(e.upper() + ":1" for e in entries))
+        for name, (custom, entries) in router.state["svc_rules"].items()
     )
 
 

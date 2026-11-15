@@ -279,8 +279,8 @@ def read_service_rules(client):
                             endpoint="serviceBlockingRules.cmd", action="readall")
         ports = []
         for entry in [e for e in fields[2].split(";") if e.strip()]:
-            parts = entry.split(":")
-            if len(parts) != 3:
+            parts = entry.split(":")   # protocol:start:end, and a fourth field on current firmware
+            if len(parts) not in (3, 4):
                 raise ExosError("unexpected service rule entry from the router: %r" % entry[:80],
                                 endpoint="serviceBlockingRules.cmd", action="readall")
             ports.append({"protocol": _service_protocol(parts[0]), "port": int(parts[1]), "port_end": int(parts[2])})
