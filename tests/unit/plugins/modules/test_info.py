@@ -84,3 +84,16 @@ def test_dmz_host_is_asked_for_the_way_the_router_page_does():
     asked = [c[1] for c in router.calls if c[0] == "cgi_parameter_value.cmd"]
     assert {"action": "get", "ejGetVal": "enblUpnp,enblUpnpnat,fwLevel,fwStealthMode"} in asked
     assert {"action": "get", "ejGetOtherVal": "dmzHost"} in asked
+
+
+def test_port_forwards_come_back_as_rules_from_the_routers_text_reply():
+    canned = replies.canned()
+    canned[("portForwardingAssociations.cmd", "readall")] = "TCP,192.0.2.50,8080,8080,0.0.0.0,80,80|UDP,192.0.2.51,53,53,198.51.100.7,5353,5353"
+    router = FakeRouter(replies=canned)
+    forwards = info.run({"gather_subset": ["security"]}, make(router))["exos"]["security"]["port_forwards"]
+    assert forwards == [
+        {"protocol": "tcp", "local_ip": "192.0.2.50", "local_port": 8080, "local_port_end": 8080,
+         "remote_ip": None, "remote_port": 80, "remote_port_end": 80},
+        {"protocol": "udp", "local_ip": "192.0.2.51", "local_port": 53, "local_port_end": 53,
+         "remote_ip": "198.51.100.7", "remote_port": 5353, "remote_port_end": 5353},
+    ]

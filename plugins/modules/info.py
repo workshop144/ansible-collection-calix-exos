@@ -100,7 +100,10 @@ exos:
                 "security": "psk-mixed+aes", "wps": true, "wps_type": "PushButton", "isolation": false,
                 "network_type": null, "gateway": null}]
     security:
-      description: UPnP, firewall, DMZ and port forwarding state.
+      description:
+        - UPnP, firewall, DMZ and port forwarding state.
+        - Each entry of C(port_forwards) has the keys the M(workshop144.calix_exos.port_forward)
+          module returns.
       type: dict
       sample: {"upnp": false, "upnp_nat": false, "firewall_level": "High", "stealth_mode": true,
                "dmz_host": null, "port_forwards": []}
@@ -118,7 +121,7 @@ exos:
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.workshop144.calix_exos.plugins.module_utils import normalize
+from ansible_collections.workshop144.calix_exos.plugins.module_utils import normalize, settings
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import (
     EXOS_ARGUMENT_SPEC,
     ExosError,
@@ -160,9 +163,8 @@ def _security(client):
     params = client.call("cgi_parameter_value.cmd", action="get", ejGetVal=SECURITY_PARAMS)
     other = client.call("cgi_parameter_value.cmd", action="get", ejGetOtherVal=SECURITY_OTHER_PARAMS)
     params = dict(params if isinstance(params, dict) else {}, **(other if isinstance(other, dict) else {}))
-    dmz = client.call("scdmz.cmd", action="get")
-    forwards = client.call("portForwardingAssociations.cmd", action="readall")
-    return normalize.security(params, dmz, forwards)
+    forwards = [settings.public_rule(rule) for rule in settings.read_port_forwards(client)]
+    return normalize.security(params, None, forwards)
 
 
 def _wan(client):
