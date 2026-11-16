@@ -351,3 +351,52 @@ def test_service_blocking_waits_out_a_router_that_goes_quiet_after_the_change():
     result = service_blocking.run({"ip": "192.0.2.50", "rule": "games", "state": "present"}, client_for(router), False,
                                   sleep=no_sleep)
     assert result["changed"] is True and router.state["svc_assocs"] == [("192.0.2.50", "games")]
+
+
+# ---------------------------------------------------------------- the router is briefly busy after a rule change
+
+FORWARD = dict(protocol="tcp", local_ip="192.0.2.60", local_port=8080, local_port_end=None, remote_port=80,
+               remote_port_end=None, remote_ip=None, state="present")
+
+
+def test_port_forward_add_refused_as_internal_error_is_tried_again():
+    # Seen live: an add straight after a remove was answered #ERROR_018, and worked moments later.
+    router = settings_router(forwards=[["TCP", "192.0.2.50", "8080", "8080", "0.0.0.0", "80", "80"]])
+    router.fail_next("advancedPortForwarding.cmd", "add", "#ERROR_018")
+    result = port_forward.run(dict(FORWARD), client_for(router), False, sleep=no_sleep)
+    assert result["changed"] is True
+    assert router.state["forwards"] == [["TCP", "192.0.2.60", "8080", "8080", "0.0.0.0", "80", "80"]]
+
+
+def test_port_forward_internal_error_that_had_in_fact_worked_is_not_sent_twice():
+    router = settings_router()
+    original = router.handlers["advancedPortForwarding.cmd"]
+
+    def works_but_says_no(r, action, params):
+        original(r, action, params)
+        return "#ERROR_018" if action == "add" else ""
+    router.handlers["advancedPortForwarding.cmd"] = works_but_says_no
+    result = port_forward.run(dict(FORWARD), client_for(router), False, sleep=no_sleep)
+    assert result["changed"] is True and len(router.state["forwards"]) == 1
+
+
+def test_port_forward_internal_error_every_time_still_fails_and_restores():
+    old = ["TCP", "192.0.2.50", "8080", "8080", "0.0.0.0", "80", "80"]
+    router = settings_router(forwards=[list(old)])
+    for dummy in range(3):
+        router.fail_next("advancedPortForwarding.cmd", "add", "#ERROR_018")
+    with pytest.raises(ExosModuleError) as err:
+        port_forward.run(dict(FORWARD), client_for(router), False, sleep=no_sleep)
+    assert router.state["forwards"] == [old] and "restored" in str(err.value)
+
+
+def test_dmz_and_dns_adds_are_tried_again_after_an_internal_error():
+    router = settings_router(dmz="192.0.2.50")
+    router.fail_next("scdmz.cmd", "add", "#ERROR_018")
+    assert dmz.run({"dmz_host": "192.0.2.60", "state": "present"}, client_for(router), False, sleep=no_sleep)["changed"]
+    assert router.state["dmz"] == "192.0.2.60"
+    router = settings_router(dns=[("printer.example", "192.0.2.50")])
+    router.fail_next("dns_host_mapping.cmd", "add", "#ERROR_018")
+    result = dns_host_mapping.run({"hostname": "printer.example", "ip": "192.0.2.60", "state": "present"},
+                                  client_for(router), False, sleep=no_sleep)
+    assert result["changed"] is True and router.state["dns"] == [("printer.example", "192.0.2.60")]

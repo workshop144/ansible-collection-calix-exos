@@ -96,8 +96,15 @@ rule:
            "remote_ip": null, "remote_port": 8080, "remote_port_end": 8080}
 """
 
+import time
+
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import (
+    ExosModuleError,
+    add_when_ready,
+    changed_result,
+    run_module,
+)
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 RESERVED_ANY = range(60000, 60101)
@@ -138,12 +145,16 @@ def _find(rules, wanted):
     return next((rule for rule in rules if _same_identity(rule, wanted)), None)
 
 
-def _put_back(client, old, cause):
+def _put_back(client, old, cause, sleep):
     """The new rule was refused after the old one was removed: restore the old one and say so."""
     what = "could not add the new rule (%s)" % cause
     try:
-        client.call_text("advancedPortForwarding.cmd", action="add",
-                         **settings.port_forward_fields(old, remote_raw=old["_remote_raw"]))
+        add_when_ready(
+            lambda: client.call_text("advancedPortForwarding.cmd", action="add",
+                                     **settings.port_forward_fields(old, remote_raw=old["_remote_raw"])),
+            lambda: _find(settings.read_port_forwards(client), old) is not None,
+            sleep,
+        )
         restored = _find(settings.read_port_forwards(client), old) is not None
     except ExosError:
         restored = False
@@ -152,7 +163,7 @@ def _put_back(client, old, cause):
     raise ExosModuleError("%s, and the old rule could not be put back: the port is no longer forwarded" % what) from None
 
 
-def run(params, client, check_mode):
+def run(params, client, check_mode, sleep=time.sleep):
     wanted = _wanted(params)
     present = params["state"] == "present"
     with client:
@@ -165,11 +176,16 @@ def run(params, client, check_mode):
                 client.call_text("advancedPortForwarding.cmd", action="remove", **fields)
             if present:
                 try:
-                    client.call_text("advancedPortForwarding.cmd", action="add", **settings.port_forward_fields(wanted))
+                    add_when_ready(
+                        lambda: client.call_text("advancedPortForwarding.cmd", action="add",
+                                                 **settings.port_forward_fields(wanted)),
+                        lambda: _find(settings.read_port_forwards(client), wanted) is not None,
+                        sleep,
+                    )
                 except ExosError as err:
                     if not existing:
                         raise
-                    _put_back(client, existing, err)
+                    _put_back(client, existing, err, sleep)
             found = _find(settings.read_port_forwards(client), wanted)
             now = settings.public_rule(found) if found else None
             if now != after:

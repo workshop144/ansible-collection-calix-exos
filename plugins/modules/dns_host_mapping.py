@@ -65,9 +65,15 @@ mapping:
 """
 
 import re
+import time
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import (
+    ExosModuleError,
+    add_when_ready,
+    changed_result,
+    run_module,
+)
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 LABELS = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$")
@@ -97,7 +103,7 @@ def _put_back(client, old, cause):
     raise ExosModuleError("%s, and the old mapping could not be put back: the name is no longer mapped" % what) from None
 
 
-def run(params, client, check_mode):
+def run(params, client, check_mode, sleep=time.sleep):
     name = _hostname(params["hostname"])
     present = params["state"] == "present"
     after = {"hostname": name, "ip": settings.ipv4(params["ip"], "ip")} if present else None
@@ -115,7 +121,11 @@ def run(params, client, check_mode):
                 client.call_text("dns_host_mapping.cmd", action="del", hostName=before["hostname"], ip=before["ip"])
             if after:
                 try:
-                    client.call_text("dns_host_mapping.cmd", action="add", hostName=after["hostname"], ip=after["ip"])
+                    add_when_ready(
+                        lambda: client.call_text("dns_host_mapping.cmd", action="add", hostName=after["hostname"], ip=after["ip"]),
+                        lambda: _find(settings.read_dns_mappings(client), name) == after,
+                        sleep,
+                    )
                 except ExosError as err:
                     if not before:
                         raise

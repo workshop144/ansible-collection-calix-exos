@@ -60,8 +60,15 @@ dmz_host:
   sample: 192.0.2.50
 """
 
+import time
+
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import (
+    ExosModuleError,
+    add_when_ready,
+    changed_result,
+    run_module,
+)
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 
@@ -78,7 +85,7 @@ def _put_back(client, old, new, cause):
     raise ExosModuleError("%s, and %s could not be put back: there is now no DMZ host" % (what, old)) from None
 
 
-def run(params, client, check_mode):
+def run(params, client, check_mode, sleep=time.sleep):
     wanted = settings.ipv4(params["dmz_host"], "DMZ host") if params["state"] == "present" else None
     with client:
         before = settings.read_dmz(client)
@@ -87,7 +94,8 @@ def run(params, client, check_mode):
                 client.call_text("scdmz.cmd", action="remove", address=before)
             if wanted:
                 try:
-                    client.call_text("scdmz.cmd", action="add", address=wanted)
+                    add_when_ready(lambda: client.call_text("scdmz.cmd", action="add", address=wanted),
+                                   lambda: settings.read_dmz(client) == wanted, sleep)
                 except ExosError as err:
                     if not before:
                         raise

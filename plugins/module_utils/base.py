@@ -38,6 +38,27 @@ def on_off(value, what):
     raise ExosError("the router reports %s as %r, which this collection does not understand" % (what, value))
 
 
+BUSY = "018"   # "Internal Error.": what the router answers when a change arrives while it is applying the last one
+
+
+def add_when_ready(add, is_there, sleep, tries=3, delay=3):
+    """Send an add, trying again if the router answers that it is busy.
+
+    Before each further try, ``is_there()`` is asked whether the entry exists after all, so that
+    an add that worked but was answered with an error is never sent twice.
+    """
+    for attempt in range(tries):
+        try:
+            add()
+            return
+        except ExosError as err:
+            if err.code != BUSY or attempt == tries - 1:
+                raise
+        sleep(delay)
+        if is_there():
+            return
+
+
 def changed_result(before, after, **extra):
     """The usual result of a settings module: changed when before and after differ, with a diff."""
     result = {"changed": before != after, "diff": {"before": before, "after": after}}
