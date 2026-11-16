@@ -23,6 +23,8 @@ Other:
 
 - A failure message now carries the router's own wording for an `#ERROR_nnn` reply.
 - A flag the router reports in a spelling the collection does not know is an error, not "off".
+- `timeout` now defaults to 30 seconds (was 15). The router's web server stops answering for
+  around 15 seconds after some changes, which made tasks fail now and then.
 - `module_defaults` group `workshop144.calix_exos.all`.
 - Every module was run against a GS4227 and a GS4227W on EXOS 25.4.0; the README says what
   each live run did and did not exercise.

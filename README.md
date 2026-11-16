@@ -102,7 +102,7 @@ The modules run on the control node and talk HTTPS to the router, so use `connec
 | `username` | `admin` | |
 | `password` | required | Never logged. Falls back to the environment variable `CALIX_EXOS_PASSWORD`. |
 | `validate_certs` | `false` | The router ships with a self-signed certificate. |
-| `timeout` | `15` | Seconds per request. |
+| `timeout` | `30` | Seconds per request. The router can pause for around 15 seconds while it applies a change. |
 
 Each task logs in, does its work and logs out (`reboot` ends its first session by restarting
 the router). A failed login is never retried, because the router locks the account after

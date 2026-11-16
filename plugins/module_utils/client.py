@@ -12,6 +12,7 @@ import hashlib
 import http.client
 import json
 import re
+import time
 from http.cookiejar import CookieJar
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -24,6 +25,7 @@ from ansible_collections.workshop144.calix_exos.plugins.module_utils.errors impo
 LOGIN_PAGE_MARKER = "Login - Residential Gateway"
 ERROR_PREFIX = "#ERROR_"
 EXCERPT_LENGTH = 80
+NONCE_TRIES = 3
 KEY_BEARING = ("wlinfo.cmd", "ddnsmngr.cmd", "wireless_multiplessid.wl")   # replies never quoted in an error
 SESSION_COOKIE = "Authorization"
 
@@ -32,7 +34,7 @@ EXOS_ARGUMENT_SPEC = dict(
     username=dict(type="str", default="admin"),
     password=dict(type="str", required=True, no_log=True, fallback=(env_fallback, ["CALIX_EXOS_PASSWORD"])),
     validate_certs=dict(type="bool", default=False),
-    timeout=dict(type="int", default=15),
+    timeout=dict(type="int", default=30),
 )
 
 
@@ -76,11 +78,12 @@ def normalize_mac(value):
 class ExosClient:
     """One session with one router. Use as a context manager: it logs in and always logs out."""
 
-    def __init__(self, host, username, password, validate_certs=False, timeout=15, request=None):
+    def __init__(self, host, username, password, validate_certs=False, timeout=30, request=None):
         self.host = host
         self.username = username
         self._password = password
         self.base_url = "https://%s" % host
+        self.retry_delay = 5    # seconds between tries of the request that precedes a login
         # No proxy (the router is on the local network) and no redirects (a redirect is never a
         # normal reply here, and following one would hide a refused login).
         self._request = request or Request(
@@ -132,12 +135,21 @@ class ExosClient:
                 "no password given for %s (set the password option or CALIX_EXOS_PASSWORD)" % self.host,
                 endpoint="login.cgi",
             )
-        try:
-            nonce = self._post("login_nonce.cmd").strip()
-        except HTTPError as err:
-            raise ExosError(
-                "HTTP %s from %s (login_nonce.cmd)" % (err.code, self.host), endpoint="login_nonce.cmd"
-            ) from None
+        nonce = None
+        for attempt in range(NONCE_TRIES):
+            # Asking for a nonce is not a login attempt, so it is safe to repeat. The router's web
+            # server stops answering for some seconds after certain changes.
+            try:
+                nonce = self._post("login_nonce.cmd").strip()
+                break
+            except HTTPError as err:
+                raise ExosError(
+                    "HTTP %s from %s (login_nonce.cmd)" % (err.code, self.host), endpoint="login_nonce.cmd"
+                ) from None
+            except ExosError as err:
+                if not err.unreachable or attempt == NONCE_TRIES - 1:
+                    raise
+                time.sleep(self.retry_delay)
         if not re.fullmatch(r"[0-9a-fA-F]{16,128}", nonce):
             raise ExosError(
                 "%s did not return a login nonce; is this a Calix EXOS router?" % self.host,

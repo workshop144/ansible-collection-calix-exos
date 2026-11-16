@@ -90,9 +90,13 @@ def test_garbage_body_raises_with_80_char_excerpt():
 
 def test_unreachable_raises_exoserror_naming_host():
     router = FakeRouter()
-    router.fail_next("login_nonce.cmd", None, URLError("timed out"))
+    for dummy in range(3):
+        router.fail_next("login_nonce.cmd", None, URLError("timed out"))
+    client = ExosClient(HOST, "admin", "pw", request=router)
+    client.retry_delay = 0
     with pytest.raises(ExosError) as err:
-        ExosClient(HOST, "admin", "pw", request=router).login()
+        client.login()
+    assert router.endpoints().count("login_nonce.cmd") == 3 and "login.cgi" not in router.endpoints()
     assert HOST in str(err.value)
     assert "login_nonce.cmd" in str(err.value)
 
@@ -250,3 +254,19 @@ def test_encrypt_secret_rejects_non_ascii():
     from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import encrypt_secret
     with pytest.raises(ValueError):
         encrypt_secret("pässword", "a", "b", "c")
+
+
+def test_login_waits_out_a_router_that_is_briefly_not_answering():
+    # Seen live: the web server stops answering for about 13 seconds after some changes.
+    router = FakeRouter()
+    router.fail_next("login_nonce.cmd", None, TimeoutError("timed out"))
+    router.fail_next("login_nonce.cmd", None, TimeoutError("timed out"))
+    client = ExosClient(HOST, "admin", "pw", request=router)
+    client.retry_delay = 0
+    client.login()
+    assert router.logged_in and router.endpoints().count("login.cgi") == 1
+
+
+def test_default_timeout_outlasts_the_routers_pause():
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import EXOS_ARGUMENT_SPEC
+    assert EXOS_ARGUMENT_SPEC["timeout"]["default"] == 30

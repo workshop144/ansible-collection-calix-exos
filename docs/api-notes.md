@@ -126,6 +126,11 @@ read the keys.
 | Backup | GET `backupsettings.conf` | not covered |
 | Reboot | | POST `rebootinfo.cgi` with no fields; `login_nonce.cmd` answers again after about a minute and a half |
 
+Pauses. After a change that touches the firewall (a DMZ host, a port forward, a blocked
+service), the web server stops answering for around 13 seconds, measured on a GS4227. A change
+sent in that window can also be answered `#ERROR_018` (Internal Error) and then work when sent
+again.
+
 Parental control pages are refused unless `apps_status.cmd` reports `scheduleType` `ewi`, and
 website blocking is refused while the provider's security app runs.
 
