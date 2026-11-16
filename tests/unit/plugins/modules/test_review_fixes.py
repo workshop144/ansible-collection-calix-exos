@@ -339,3 +339,15 @@ def test_backup_tightens_the_permissions_of_an_identical_file(tmp_path):
     dest.chmod(0o644)
     result = go(backup, router, dest=str(dest))
     assert oct(dest.stat().st_mode & 0o777) == "0o600" and result["changed"] is True
+
+
+def test_service_blocking_waits_out_a_router_that_goes_quiet_after_the_change():
+    # Seen live: after an association change the router can stop answering for a while.
+    from ansible_collections.workshop144.calix_exos.plugins.modules import service_blocking
+    router = settings_router(svc_rules={"games": ("1", ["tcp:9:9"])})
+    router.fail_next("serviceBlockingAssociations.cmd", "readall", None)                     # the read before
+    router.fail_next("serviceBlockingAssociations.cmd", "readall", TimeoutError("timed out"))
+    router.fail_next("serviceBlockingAssociations.cmd", "readall", TimeoutError("timed out"))
+    result = service_blocking.run({"ip": "192.0.2.50", "rule": "games", "state": "present"}, client_for(router), False,
+                                  sleep=no_sleep)
+    assert result["changed"] is True and router.state["svc_assocs"] == [("192.0.2.50", "games")]

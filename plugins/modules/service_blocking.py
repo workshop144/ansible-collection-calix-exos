@@ -46,6 +46,8 @@ attributes:
 notes:
   - The router refuses changes to parental controls while the provider's app manages them. The
     module then fails without changing anything.
+  - The router can stop answering for up to a minute while it applies a change here. The module
+    waits for it.
 """
 
 EXAMPLES = r"""
@@ -70,6 +72,7 @@ import time
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 
 def run(params, client, check_mode, sleep=time.sleep):
@@ -92,12 +95,21 @@ def run(params, client, check_mode, sleep=time.sleep):
                 client.call_text("serviceBlockingAssociation.cmd", action="add", ruleName=wanted["rule"], ipAddress=wanted["ip"])
             else:
                 client.call_text("serviceBlockingAssociation.cmd", action="remove", ipAddress=wanted["ip"], ruleName=wanted["rule"])
-            now = None
-            for dummy in range(5):   # the router takes a moment to show the change
+            now, quiet = None, None
+            for dummy in range(12):   # the router takes a moment to show the change, and can go quiet while it applies it
                 sleep(2)
-                now = dict(wanted) if wanted in settings.read_service_blocks(client) else None
+                try:
+                    now = dict(wanted) if wanted in settings.read_service_blocks(client) else None
+                except ExosError as err:
+                    if not err.unreachable:
+                        raise
+                    quiet = err
+                    continue
+                quiet = None
                 if now == after:
                     break
+            if quiet is not None:
+                raise ExosModuleError("the change was sent, but the router stopped answering afterwards: %s" % quiet)
             if now != after:
                 raise ExosModuleError("the router accepted the change but does not show it")
     return changed_result(before, after, blocked=after)
