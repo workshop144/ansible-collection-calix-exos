@@ -103,7 +103,7 @@ def test_dhcp_needs_an_option_check_mode_readback():
 
 # ---------------------------------------------------------------- wifi_secondary_network
 
-NET = dict(ssid="guests", kind="guest", band="all", security="wpa2-wpa3", key="eight chars or more", isolation=None, state="present")
+NET = dict(ssid="guests", kind=None, band=None, security=None, key="eight chars or more", isolation=None, state="present")
 
 
 def net(**changes):
@@ -298,7 +298,7 @@ def test_reboot_sends_the_request_and_waits_for_the_router_to_answer():
     assert router.state["rebooted"] is True
     assert naps[0] == 80 and len(naps) >= 3          # the fixed settle time, then polls while it was down
     assert result["changed"] is True and result["rebooted"] is True and result["waited_seconds"] >= 80
-    assert "logout.cgi" not in router.endpoints()    # the session died with the reboot
+    assert result["uptime_seconds"] == 90           # read after logging in again
 
 
 def test_reboot_without_waiting_and_check_mode():

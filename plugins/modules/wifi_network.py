@@ -98,9 +98,12 @@ def run(params, client, check_mode, sleep=time.sleep):
         wire_security = wifi.SECURITY.get(wanted["security"], wanted["security"])
         keyless = wire_security in wifi.KEYLESS
         held = wifi.stored_key(row)
-        key = None if keyless else (new_key if new_key is not None else held)
-        if not keyless and not key:
-            raise ExosModuleError("a key is required: the network has none to keep")
+        if keyless:
+            key = None
+        elif new_key is not None:
+            key = new_key
+        else:
+            key = wifi.held_key(row)     # fails if the key the network has cannot be read back cleanly
         key_changed = bool(key) and key != held
         changed = before != wanted or key_changed
         if changed and not check_mode:

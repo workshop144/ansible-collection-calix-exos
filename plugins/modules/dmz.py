@@ -62,6 +62,20 @@ dmz_host:
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
+
+
+def _put_back(client, old, new, cause):
+    """The new host was refused after the old one was removed: restore the old one and say so."""
+    what = "could not set %s as the DMZ host (%s)" % (new, cause)
+    try:
+        client.call_text("scdmz.cmd", action="add", address=old)
+        restored = settings.read_dmz(client) == old
+    except ExosError:
+        restored = False
+    if restored:
+        raise ExosModuleError("%s; the old DMZ host %s was restored" % (what, old)) from None
+    raise ExosModuleError("%s, and %s could not be put back: there is now no DMZ host" % (what, old)) from None
 
 
 def run(params, client, check_mode):
@@ -72,7 +86,12 @@ def run(params, client, check_mode):
             if before:
                 client.call_text("scdmz.cmd", action="remove", address=before)
             if wanted:
-                client.call_text("scdmz.cmd", action="add", address=wanted)
+                try:
+                    client.call_text("scdmz.cmd", action="add", address=wanted)
+                except ExosError as err:
+                    if not before:
+                        raise
+                    _put_back(client, before, wanted, err)
             now = settings.read_dmz(client)
             if now != wanted:
                 raise ExosModuleError("the router accepted the DMZ change but reports %r" % (now,))

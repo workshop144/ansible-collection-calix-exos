@@ -98,6 +98,7 @@ rule:
 
 from ansible_collections.workshop144.calix_exos.plugins.module_utils import settings
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, changed_result, run_module
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 RESERVED_ANY = range(60000, 60101)
 RESERVED_TCP = (8443, 30005, 30006, 30007)
@@ -137,6 +138,20 @@ def _find(rules, wanted):
     return next((rule for rule in rules if _same_identity(rule, wanted)), None)
 
 
+def _put_back(client, old, cause):
+    """The new rule was refused after the old one was removed: restore the old one and say so."""
+    what = "could not add the new rule (%s)" % cause
+    try:
+        client.call_text("advancedPortForwarding.cmd", action="add",
+                         **settings.port_forward_fields(old, remote_raw=old["_remote_raw"]))
+        restored = _find(settings.read_port_forwards(client), old) is not None
+    except ExosError:
+        restored = False
+    if restored:
+        raise ExosModuleError("%s; the old rule was restored" % what) from None
+    raise ExosModuleError("%s, and the old rule could not be put back: the port is no longer forwarded" % what) from None
+
+
 def run(params, client, check_mode):
     wanted = _wanted(params)
     present = params["state"] == "present"
@@ -149,7 +164,12 @@ def run(params, client, check_mode):
                 fields = settings.port_forward_fields(existing, remote_raw=existing["_remote_raw"])
                 client.call_text("advancedPortForwarding.cmd", action="remove", **fields)
             if present:
-                client.call_text("advancedPortForwarding.cmd", action="add", **settings.port_forward_fields(wanted))
+                try:
+                    client.call_text("advancedPortForwarding.cmd", action="add", **settings.port_forward_fields(wanted))
+                except ExosError as err:
+                    if not existing:
+                        raise
+                    _put_back(client, existing, err)
             found = _find(settings.read_port_forwards(client), wanted)
             now = settings.public_rule(found) if found else None
             if now != after:

@@ -132,6 +132,12 @@ def run(params, client, check_mode):
         before = _public(current)
         if before != after:
             settings.require_local_parental_controls(client)
+        if before and after is None:
+            users = [entry["ip"] for entry in settings.read_service_blocks(client) if entry["rule"] == name]
+            if users:
+                raise ExosModuleError(
+                    "%s is still blocked for %s; remove that with service_blocking first" % (name, ", ".join(users))
+                )
         if before != after and not check_mode:
             have = {_key(e): e for e in (before["ports"] if before else [])}
             want = {_key(e): e for e in (after["ports"] if after else [])}

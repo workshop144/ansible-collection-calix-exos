@@ -51,6 +51,7 @@
         that:
           - boot_check is changed and not boot_check.rebooted
           - boot is changed and boot.rebooted
+          - boot.uptime_seconds is not none and boot.uptime_seconds < 900
           - boot_after.exos.system.uptime is match('^0D 0H')
           - boot_after.exos.dhcp_reservations == boot_before.exos.dhcp_reservations
           - boot_after.exos.security == boot_before.exos.security

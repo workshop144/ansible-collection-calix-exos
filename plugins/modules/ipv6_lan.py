@@ -100,19 +100,21 @@ def run(params, client, check_mode):
         if dns is not None:
             wanted["dns_servers"] = dns
         if before != wanted and not check_mode:
-            payload = dict(raw)
-            payload.update(
-                action="apply",
-                ra="server" if wanted["router_advertisement"] else "disabled",
-                dhcpv6="server" if wanted["dhcpv6"] else "disabled",
-                dhcpv6Mode=wanted["dhcpv6_mode"],
-                dns6Type="custom" if wanted["dns_servers"] else "default",
-            )
-            payload.pop("advPriDns", None)
-            payload.pop("advSecDns", None)
-            if wanted["dns_servers"]:
-                payload["advPriDns"] = wanted["dns_servers"][0]
-                payload["advSecDns"] = wanted["dns_servers"][1] if len(wanted["dns_servers"]) > 1 else ""
+            payload = dict(raw, action="apply")     # everything as the router gave it, then only what was asked
+            if given["router_advertisement"] is not None:
+                payload["ra"] = "server" if wanted["router_advertisement"] else "disabled"
+            if given["dhcpv6"] is not None:
+                payload["dhcpv6"] = "server" if wanted["dhcpv6"] else "disabled"
+            if given["dhcpv6_mode"] is not None:
+                payload["dhcpv6Mode"] = wanted["dhcpv6_mode"]
+            if dns is not None:
+                payload["dns6Type"] = "custom" if dns else "default"
+                if dns:
+                    payload["advPriDns"] = dns[0]
+                    payload["advSecDns"] = dns[1] if len(dns) > 1 else ""
+            if payload.get("dns6Type") != "custom":   # the admin page leaves these out for the default
+                payload.pop("advPriDns", None)
+                payload.pop("advSecDns", None)
             client.call_json("lan_setting_ipv6.cmd", payload)
             now = settings.public_ipv6_lan(settings.read_ipv6_lan_raw(client))
             if now != wanted:

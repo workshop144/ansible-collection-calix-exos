@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, flag
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, flag, on_off
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError
 
 PARAMS = "cgi_parameter_value.cmd"
@@ -57,7 +57,7 @@ def port(value, what="port"):
 
 def read_upnp(client):
     reply = params(client, names=("enblUpnp", "enblUpnpnat"))
-    return {"enabled": flag(reply["enblUpnp"]), "nat_t": flag(reply["enblUpnpnat"])}
+    return {"enabled": on_off(reply["enblUpnp"], "UPnP"), "nat_t": on_off(reply["enblUpnpnat"], "UPnP NAT-T")}
 
 
 def write_upnp(client, enabled, nat_t):
@@ -70,7 +70,7 @@ def parse_dmz(value):
     """``<on>|<host>``; ``0|`` means none is set."""
     text = str(value or "").strip()
     if "|" not in text:
-        return text or None
+        return None
     enabled, host = text.split("|", 1)
     if not flag(enabled):
         return None
@@ -157,7 +157,7 @@ def read_arp_spoofing(client):
     reply = client.call_json("arp_spoof.cmd", {"action": "get"})
     if not isinstance(reply, dict) or "admin" not in reply:
         raise ExosError("the router did not return its ARP spoofing setting", endpoint="arp_spoof.cmd", action="get")
-    return flag(reply["admin"])
+    return on_off(reply["admin"], "ARP spoofing protection")
 
 
 # ---- controls (LED, SIP ALG)
@@ -173,9 +173,9 @@ def read_controls(client):
     dimmable = flag(reply.get("brightness_supported", 0))
     brightness = reply.get("brightness")
     return {
-        "led": flag(reply["led"]),
+        "led": on_off(reply["led"], "the LED"),
         "brightness": int(brightness) if dimmable and brightness is not None else None,
-        "sip_alg": flag(reply["sip"]),
+        "sip_alg": on_off(reply["sip"], "SIP ALG"),
     }
 
 
@@ -190,7 +190,7 @@ def read_firewall(client):
     if level is None:
         raise ExosError("the router reports a firewall level this collection does not know: %r" % (reply["fwLevel"],),
                         endpoint=PARAMS, action="get")
-    return {"level": level, "stealth_mode": flag(reply["fwStealthMode"])}
+    return {"level": level, "stealth_mode": on_off(reply["fwStealthMode"], "stealth mode")}
 
 
 # ---- custom firewall rules (the Advanced Firewall page)
@@ -313,6 +313,10 @@ def read_ipv6_lan_raw(client):
 
 def public_ipv6_lan(raw):
     custom = raw.get("dns6Type") == "custom"
+    for name in ("ra", "dhcpv6"):
+        if raw[name] not in ("server", "disabled"):
+            raise ExosError("the router reports %s as %r, which this collection does not understand" % (name, raw[name]),
+                            endpoint="lan_setting_ipv6.cmd", action="load")
     return {
         "router_advertisement": raw["ra"] == "server",
         "dhcpv6": raw["dhcpv6"] == "server",
@@ -335,7 +339,7 @@ def public_dhcp(raw):
     servers = [s for s in (raw["dhcpPrimaryDNS"], raw["dhcpSecondaryDNS"]) if s and s != "0.0.0.0"] if custom else []
     lease = str(raw["dhcpLeasedTime"])
     return {
-        "enabled": flag(raw["enblDhcpSrv"]),
+        "enabled": on_off(raw["enblDhcpSrv"], "the DHCP server"),
         "pool_start": raw["dhcpEthStart"],
         "pool_end": raw["dhcpEthEnd"],
         "lease_seconds": int(lease) if lease.isdigit() else None,

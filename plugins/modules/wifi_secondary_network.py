@@ -25,23 +25,25 @@ options:
     required: true
   kind:
     description:
-      - What sort of network to create. V(guest) and V(work_from_home) use every band.
+      - What sort of network to create; V(guest) when not given. V(guest) and V(work_from_home)
+        use every band.
+      - It cannot be changed afterwards. For a network that exists, leave it out or give the
+        kind it has.
     type: str
     choices: [guest, work_from_home, custom]
-    default: guest
   band:
     description:
-      - Band of a V(custom) network.
+      - Band of a V(custom) network; every band when not given. It cannot be changed afterwards.
     type: str
     choices: ["2.4", "5", "6", all]
-    default: all
   security:
     description:
-      - How the network is secured. A 6 GHz network takes V(wpa3) or V(enhanced-open) only, and a
-        V(work_from_home) network cannot be V(none).
+      - How the network is secured. A new network gets V(wpa2-wpa3) when this is not given; a
+        network that exists keeps what it has.
+      - A 6 GHz network takes V(wpa3) or V(enhanced-open) only, and a V(work_from_home) network
+        cannot be V(none).
     type: str
     choices: [wpa2-wpa3, wpa3, wpa-wpa2, wpa2, enhanced-open, none]
-    default: wpa2-wpa3
   key:
     description:
       - The Wi-Fi key, 8 to 63 printable ASCII characters. Required to create a secured network.
@@ -113,7 +115,7 @@ def _settled(client, ssid, expect, key, sleep):
     for dummy in range(wifi.SETTLE_TRIES):
         row = _find(wifi.secondary_rows(client), ssid)
         seen = wifi.public_secondary(row) if row else None
-        if seen == expect and (expect is None or key is None or wifi.stored_key(row) == key):
+        if seen == expect and (expect is None or not key or wifi.stored_key(row) == key):
             return seen, True
         sleep(wifi.SETTLE_DELAY)
     return seen, False
@@ -122,61 +124,60 @@ def _settled(client, ssid, expect, key, sleep):
 def run(params, client, check_mode, sleep=time.sleep):
     ssid = wifi.check_ssid(params["ssid"])
     present = params["state"] == "present"
-    kind, band = params["kind"], params["band"] if params["kind"] == "custom" else "all"
-    wire_security = wifi.SECURITY[params["security"]]
-    keyless = wire_security in wifi.KEYLESS
-    key = wifi.check_key(params["key"]) if params.get("key") is not None and not keyless else None
-    if present:
-        if band == "6" and wire_security not in ("wpa3", "owe"):
-            raise ExosModuleError("a 6 GHz network takes security wpa3 or enhanced-open only")
-        if kind == "work_from_home" and wire_security == "disabled":
-            raise ExosModuleError("a work_from_home network cannot be open")
+    given_key = wifi.check_key(params["key"]) if present and params.get("key") is not None else None
     with client:
         row = _find(wifi.secondary_rows(client), ssid)
         before = wifi.public_secondary(row) if row else None
-        key_changed = False
-        after = None
+        key, key_changed, after, wire_security = None, False, None, None
         if present:
             if row is None:
-                if not keyless and key is None:
-                    raise ExosModuleError("a key is required to create a secured network")
+                kind = params.get("kind") or "guest"
+                band = (params.get("band") or "all") if kind == "custom" else "all"
+                security = params.get("security") or "wpa2-wpa3"
                 isolation = params["isolation"] if params.get("isolation") is not None else kind in ("guest", "work_from_home")
-                after = {"ssid": ssid, "kind": kind, "band": band, "security": params["security"], "isolation": isolation}
-                key_changed = not keyless
             else:
-                if (before["kind"], before["band"]) != (kind, band) and (params["kind"] != "guest" or params["band"] != "all"):
-                    raise ExosModuleError(
-                        "%s is a %s network on band %s; kind and band cannot be changed, remove it first"
-                        % (ssid, before["kind"], before["band"])
-                    )
-                after = dict(before, security=params["security"])
-                if params.get("isolation") is not None:
-                    after["isolation"] = params["isolation"]
-                held = wifi.stored_key(row)
-                if keyless:
-                    key = None
-                elif key is None:
-                    key = held
-                    if not key:
-                        raise ExosModuleError("a key is required: the network has none to keep")
-                key_changed = bool(key) and key != held
+                kind, band = before["kind"], before["band"]
+                if params.get("kind") is not None and params["kind"] != kind:
+                    raise ExosModuleError("%s is a %s network; its kind cannot be changed, remove it first" % (ssid, kind))
+                if params.get("band") is not None and kind == "custom" and params["band"] != band:
+                    raise ExosModuleError("%s is on band %s; its band cannot be changed, remove it first" % (ssid, band))
+                security = params.get("security") or before["security"]
+                isolation = params["isolation"] if params.get("isolation") is not None else before["isolation"]
+            wire_security = wifi.SECURITY.get(security, security)
+            keyless = wire_security in wifi.KEYLESS
+            if band == "6" and wire_security not in ("wpa3", "owe"):
+                raise ExosModuleError("a 6 GHz network takes security wpa3 or enhanced-open only")
+            if kind == "work_from_home" and wire_security == "disabled":
+                raise ExosModuleError("a work_from_home network cannot be open")
+            after = {"ssid": ssid, "kind": kind, "band": band, "security": security, "isolation": isolation}
+            if not keyless:
+                held = wifi.stored_key(row) if row else ""
+                if given_key is not None:
+                    key = given_key
+                elif row is None:
+                    raise ExosModuleError("a key is required to create a secured network")
+                elif before == after:
+                    key = held                      # nothing to send, so nothing to read back cleanly
+                else:
+                    key = wifi.held_key(row)        # fails if the key it has cannot be read back cleanly
+                key_changed = key != held
         changed = before != after or key_changed
         if changed and not check_mode:
             if after is None:
-                payload = dict(row, actiondo=0, wlSubnet=1 if after is None and wifi.flag(row.get("wlSubnet", 0)) else 0,
+                payload = dict(row, actiondo=0, wlSubnet=1 if before["isolation"] else 0,
                                smart_qos=1 if wifi.flag(row.get("smart_qos", 0)) else 0)
                 payload.pop("wlWpaPsk", None)
             else:
                 cipher, nonce = wifi.encrypted(client, ssid, wire_security, key)
                 if row is None:
                     pool = wifi.pool_status(client)
-                    slot = wifi.POOL_KEYS[wifi.BANDS[band] if kind == "custom" else "unified"]
+                    slot = wifi.POOL_KEYS[wifi.BANDS[after["band"]] if after["kind"] == "custom" else "unified"]
                     if int(pool.get(slot, 0) or 0) < 1:
                         raise ExosModuleError("the router cannot hold another network of this kind")
+                    network_type = "custom_%s" % wifi.BANDS[after["band"]] if after["kind"] == "custom" else wifi.KINDS[after["kind"]]
                     payload = {"smart_qos": 0, "wlSsid": ssid, "wlEnbl": 1, "wlAuthMode": wire_security, "wlWpaPsk": cipher,
                                "nonce": nonce or "", "wlSubnet": 1 if after["isolation"] else 0, "wlEnblTime": "",
-                               "wlDisblTime": "", "oldname": "", "actiondo": 1,
-                               "networkType": "custom_%s" % wifi.BANDS[band] if kind == "custom" else wifi.KINDS[kind]}
+                               "wlDisblTime": "", "oldname": "", "actiondo": 1, "networkType": network_type}
                     subnet = pool.get(slot + "IP")
                     if subnet:
                         payload.update(wlStartIp="192.168.%s.2" % subnet, wlEndIp="192.168.%s.254" % subnet,
@@ -186,7 +187,7 @@ def run(params, client, check_mode, sleep=time.sleep):
                                    nonce=nonce or "", wlSubnet=1 if after["isolation"] else 0,
                                    smart_qos=1 if wifi.flag(row.get("smart_qos", 0)) else 0)
             client.call_text(ENDPOINT, **payload)
-            seen, ok = _settled(client, ssid, after, key if after and not keyless else None, sleep)
+            seen, ok = _settled(client, ssid, after, key, sleep)
             if not ok:
                 raise ExosModuleError("the router accepted the change to %s but reports %r for it" % (ssid, seen))
     result = changed_result(before, after, network=after, key_changed=key_changed)
@@ -198,9 +199,9 @@ def main():
     run_module(
         dict(
             ssid=dict(type="str", required=True),
-            kind=dict(type="str", default="guest", choices=["guest", "work_from_home", "custom"]),
-            band=dict(type="str", default="all", choices=["2.4", "5", "6", "all"]),
-            security=dict(type="str", default="wpa2-wpa3", choices=list(wifi.SECURITY)),
+            kind=dict(type="str", choices=["guest", "work_from_home", "custom"]),
+            band=dict(type="str", choices=["2.4", "5", "6", "all"]),
+            security=dict(type="str", choices=list(wifi.SECURITY)),
             key=dict(type="str", no_log=True),
             isolation=dict(type="bool"),
             state=dict(type="str", default="present", choices=["present", "absent"]),

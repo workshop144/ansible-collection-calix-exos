@@ -329,7 +329,10 @@ def _dhcpcfg(router, action, params):
 
 
 def _reboot(router, action, params):
+    if router.state.get("reboot_ignored"):      # the router answers but does not restart
+        return ""
     router.state["rebooted"] = True
+    router.state["system"] = {"system_info": [{"param": "Device Uptime", "value": "0D 0H 1M 30S"}]}
     router.logged_in = False
     router.state["down_for"] = router.state.get("boot_polls", 2)
     return ""
@@ -371,7 +374,8 @@ def settings_router(**overrides):
         "schedule_type": "ewi",
         "ddns": {"state": "1", "server": "dyndns.org", "user": "someone", "pwd": "c0ffee", "nonce": "ab" * 32,
                  "hostname": "home.example.org", "ipsrc": "network"},
-        "system": {"system_info": [{"param": "Model Number", "value": "GS4227W"}, {"param": "EXOS Version", "value": "25.4.0"}]},
+        "system": {"system_info": [{"param": "Model Number", "value": "GS4227W"}, {"param": "EXOS Version", "value": "25.4.0"},
+                                   {"param": "Device Uptime", "value": "3D 1H 2M 3S"}]},
         "connection": {"connection": {"wan": {"state": 2, "color": "green"}}, "gateway": []},
         "internet": {"status": [{"param": "IPv4 Connection", "value": "Connected", "color": "green"}],
                      "settings": [{"param": "MTU Size", "value": "1500"}],

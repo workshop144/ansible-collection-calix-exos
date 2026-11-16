@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, flag
+from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import ExosModuleError, flag, on_off
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import ExosError, decrypt_secret, encrypt_secret
 
 # what a playbook says -> what the router calls it
@@ -87,8 +87,24 @@ def primary_row(client):
     return row
 
 
+def _need(row, key, what):
+    if key not in row:
+        raise ExosError("the router did not say whether %s" % what, endpoint="wlinfo.cmd", action="get_ssid_setup")
+    return on_off(row[key], what)
+
+
 def public_primary(row):
-    return {"ssid": row["wlSsid"], "security": security_name(row["wlAuthMode"]), "hidden": flag(row.get("wlHidden", 0))}
+    return {"ssid": row["wlSsid"], "security": security_name(row["wlAuthMode"]),
+            "hidden": _need(row, "wlHidden", "the network is hidden")}
+
+
+def held_key(row):
+    """The key a network has, for sending back unchanged. Fails when it cannot be read: a key that
+    did not decrypt cleanly must never be written to the router."""
+    key = stored_key(row)
+    if not re.fullmatch(r"(?=.*\S)[\x20-\x7e]{8,63}", key):
+        raise ExosModuleError("the key %s has could not be read from the router; give the key to set" % row.get("wlSsid"))
+    return key
 
 
 def secondary_rows(client):
@@ -113,7 +129,7 @@ def split_type(network_type):
 def public_secondary(row):
     kind, band = split_type(row.get("networkType"))
     return {"ssid": row["wlSsid"], "kind": kind, "band": band, "security": security_name(row.get("wlAuthMode")),
-            "isolation": flag(row.get("wlSubnet", 0))}
+            "isolation": _need(row, "wlSubnet", "the network is isolated")}
 
 
 def pool_status(client):

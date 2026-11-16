@@ -2,7 +2,8 @@
 
 ## 0.2.0
 
-The collection now covers what an `admin` login can change in the router's own page.
+The collection now covers most of what an `admin` login can change in the router's own page.
+The README lists what is left out, and which paths were run against a real router.
 
 New modules: `upnp`, `firewall`, `firewall_rule`, `dmz`, `port_forward`, `dns_host_mapping`,
 `arp_spoofing`, `controls`, `device`, `access_schedule`, `service_blocking_rule`,
@@ -21,6 +22,7 @@ New modules: `upnp`, `firewall`, `firewall_rule`, `dmz`, `port_forward`, `dns_ho
 Other:
 
 - A failure message now carries the router's own wording for an `#ERROR_nnn` reply.
+- A flag the router reports in a spelling the collection does not know is an error, not "off".
 - `module_defaults` group `workshop144.calix_exos.all`.
 - Every module was run against a GS4227 and a GS4227W on EXOS 25.4.0; the README says what
   each live run did and did not exercise.

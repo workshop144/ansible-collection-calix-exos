@@ -80,7 +80,7 @@ def _find(client, mac):
 
 
 def _public(row, mac):
-    return {"mac": mac, "name": row.get("deviceName"), "type": row.get("type")}
+    return {"mac": mac, "name": row.get("deviceName"), "type": row.get("type") or None}
 
 
 def run(params, client, check_mode):

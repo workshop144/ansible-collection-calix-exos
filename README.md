@@ -46,13 +46,21 @@ it, and put it back. The playbooks that did so are in `tests/live/`.
 
 ### What was not exercised on a real router
 
+The live runs changed one representative thing per module. These paths are covered by unit
+tests only:
+
 - `wifi_network`: only its hidden flag was changed live. Changing the name, security or key goes
-  through the same request and is covered by unit tests, but it disconnects every device, so it
-  was not run against a network in use. The key encryption it uses was proven live by
-  `wifi_secondary_network`.
-- `dhcp`: only the lease time was changed live. A change of `lan_address` or `lan_netmask` moves
-  the router and was not run.
+  through the same request, but it disconnects every device, so it was not run against a
+  network in use. The key encryption it uses was proven live by `wifi_secondary_network`.
+- `wifi_secondary_network`: a guest network was created, re-keyed, moved between WPA2/WPA3 and
+  WPA2, had its isolation turned off, and was removed. Work-from-home and custom networks, open
+  and enhanced-open security, and 6 GHz were not run.
+- `dhcp`: only the lease time was changed live. Turning DHCP off, changing the pool or the DNS
+  servers, and changing `lan_address` or `lan_netmask` (which moves the router) were not run.
 - `wifi_radio`: only MU-MIMO on the 6 GHz radio was changed live.
+- `firewall_rule`: only the `ipv4_out` chain was used.
+- `dmz`: set and cleared; replacing one host with another was not run.
+- `port_forward`: TCP only, any source address.
 - `info`: the `ddns` part was read only with dynamic DNS off.
 
 ### What is not covered, on purpose
@@ -65,6 +73,9 @@ it, and put it back. The playbooks that did so are in `tests/live/`.
   security app runs, and the admin page has no time zone setting outside the setup wizard.
 - Anything only the provider's support login can reach (WAN and VLAN setup, TR-069, voice).
 - Wi-Fi channel, channel width and power: the admin page does not offer them.
+- Smaller things on pages that are otherwise covered: a schedule or traffic priority for a
+  secondary network, the TFTP options of the DHCP page, the Public LAN page, and starting a WPS
+  pairing.
 
 ## Install
 
@@ -93,8 +104,9 @@ The modules run on the control node and talk HTTPS to the router, so use `connec
 | `validate_certs` | `false` | The router ships with a self-signed certificate. |
 | `timeout` | `15` | Seconds per request. |
 
-Each task logs in, does its work and logs out. A failed login is never retried, because the
-router locks the account after repeated failures.
+Each task logs in, does its work and logs out (`reboot` ends its first session by restarting
+the router). A failed login is never retried, because the router locks the account after
+repeated failures.
 
 Some changes disturb the network while the router applies them. Wi-Fi changes restart the
 radios, so devices can drop for some seconds; a DHCP change restarts the DHCP and DNS service;

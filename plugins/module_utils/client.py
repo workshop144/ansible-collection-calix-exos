@@ -24,6 +24,7 @@ from ansible_collections.workshop144.calix_exos.plugins.module_utils.errors impo
 LOGIN_PAGE_MARKER = "Login - Residential Gateway"
 ERROR_PREFIX = "#ERROR_"
 EXCERPT_LENGTH = 80
+KEY_BEARING = ("wlinfo.cmd", "ddnsmngr.cmd", "wireless_multiplessid.wl")   # replies never quoted in an error
 SESSION_COOKIE = "Authorization"
 
 EXOS_ARGUMENT_SPEC = dict(
@@ -35,6 +36,15 @@ EXOS_ARGUMENT_SPEC = dict(
 )
 
 
+def _form_value(value):
+    """A form field as the admin page's own serializer writes it."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
+
+
 class ExosError(Exception):
     """A request to the router failed. ``code`` is the nnn of an ``#ERROR_nnn`` reply, if any."""
 
@@ -44,6 +54,7 @@ class ExosError(Exception):
         self.action = action
         self.code = code
         self.meaning = error_meaning(code) if code else None
+        self.unreachable = False   # True when the router could not be reached at all
 
 
 class ExosAuthError(ExosError):
@@ -102,7 +113,7 @@ class ExosClient:
             headers = dict(headers, **{"Content-Type": "application/json"})
             body = json.dumps(params)
         else:
-            body = urlencode(params or {})
+            body = urlencode({key: _form_value(value) for key, value in (params or {}).items()})
         try:
             response = self._request.post("%s/%s" % (self.base_url, endpoint), data=body, headers=headers)
             return response.read().decode("utf-8", "replace")
@@ -110,9 +121,9 @@ class ExosClient:
             raise
         except (OSError, ValueError, http.client.HTTPException) as err:
             reason = getattr(err, "reason", None) or err or type(err).__name__
-            raise ExosError(
-                "cannot reach %s (%s): %s" % (self.host, endpoint, reason), endpoint=endpoint, action=action
-            ) from None
+            failure = ExosError("cannot reach %s (%s): %s" % (self.host, endpoint, reason), endpoint=endpoint, action=action)
+            failure.unreachable = True
+            raise failure from None
 
     def login(self):
         """Log in once. A refusal is never retried: the router locks the account after repeats."""
@@ -198,9 +209,9 @@ class ExosClient:
         try:
             return json.loads(body)
         except ValueError:
+            shown = "(not shown: it can hold keys)" if endpoint in KEY_BEARING else repr(body[:EXCERPT_LENGTH])
             raise ExosError(
-                "unexpected reply from %s for %s: %r" % (host, where, body[:EXCERPT_LENGTH]),
-                endpoint=endpoint, action=action,
+                "unexpected reply from %s for %s: %s" % (host, where, shown), endpoint=endpoint, action=action
             ) from None
 
     def call(self, endpoint, **params):

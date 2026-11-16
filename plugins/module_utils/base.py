@@ -23,6 +23,21 @@ def flag(value):
     return str(value).strip().lower() in ("1", "true", "on", "yes", "enabled")
 
 
+ON = ("1", "true", "on", "yes", "enabled")
+OFF = ("0", "false", "off", "no", "disabled")
+
+
+def on_off(value, what):
+    """A flag from the router as a bool. Anything that is not a known spelling of on or off is an
+    error: a setting the collection cannot read must never be taken for off."""
+    text = str(value).strip().lower()
+    if text in ON:
+        return True
+    if text in OFF:
+        return False
+    raise ExosError("the router reports %s as %r, which this collection does not understand" % (what, value))
+
+
 def changed_result(before, after, **extra):
     """The usual result of a settings module: changed when before and after differ, with a diff."""
     result = {"changed": before != after, "diff": {"before": before, "after": after}}

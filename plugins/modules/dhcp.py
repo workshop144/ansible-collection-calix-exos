@@ -60,7 +60,8 @@ options:
     type: str
   force:
     description:
-      - Allow a change of O(lan_address) or O(lan_netmask).
+      - Allow a change of O(lan_address) or O(lan_netmask). The new address must be a private one
+        the router's own page accepts.
     type: bool
     default: false
 extends_documentation_fragment:
@@ -71,7 +72,7 @@ attributes:
     description: Reports what would change without sending any change to the router.
   diff_mode:
     support: full
-    description: Shows the setting before and after. A Wi-Fi key is never shown.
+    description: Shows the settings before and after.
 notes:
   - The router restarts its DHCP and DNS service on a change; lookups can fail for a few seconds.
   - The router sends every setting of this page together, so the module reads them all first and
@@ -107,7 +108,43 @@ from ansible_collections.workshop144.calix_exos.plugins.module_utils.base import
 LABEL = r"[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
 
 
+RESERVED_THIRD_OCTETS = tuple(range(12, 19)) + tuple(range(22, 29)) + tuple(range(32, 39))   # the router's guest subnets
+
+
+def _netmask(value):
+    mask = int(ipaddress.IPv4Address(value))
+    inverse = ~mask & 0xFFFFFFFF
+    if mask == 0 or inverse & (inverse + 1):
+        raise ExosModuleError("lan_netmask is not a netmask: %r" % (value,))
+
+
+def _check_move(wanted, before):
+    """A new LAN address must be one the router's own page would take."""
+    _netmask(wanted["lan_netmask"])
+    address = ipaddress.ip_address(wanted["lan_address"])
+    current = ipaddress.ip_network("%s/%s" % (before["lan_address"], before["lan_netmask"]), strict=False)
+    if address in current and wanted["lan_netmask"] == before["lan_netmask"]:
+        return
+    octets = [int(part) for part in wanted["lan_address"].split(".")]
+    private = octets[0] == 10 or (octets[0] == 172 and 16 <= octets[1] <= 31) or (octets[0], octets[1]) == (192, 168)
+    if not private:
+        raise ExosModuleError("lan_address must be a private address (10.x, 172.16-31.x or 192.168.x)")
+    if (octets[0], octets[1]) == (192, 168) and octets[2] in RESERVED_THIRD_OCTETS:
+        raise ExosModuleError("192.168.%d.x is one of the ranges the router keeps for its secondary networks" % octets[2])
+    if octets[0] == 172 and 28 <= octets[1] <= 31:
+        raise ExosModuleError("172.%d.x.x is a range the router keeps for itself" % octets[1])
+
+
 def _check(wanted):
+    try:
+        _check_values(wanted)
+    except ValueError:
+        raise ExosModuleError(
+            "the DHCP pool or LAN address is not set to a usable address: give pool_start and pool_end"
+        ) from None
+
+
+def _check_values(wanted):
     try:
         network = ipaddress.ip_network("%s/%s" % (wanted["lan_address"], wanted["lan_netmask"]), strict=False)
     except ValueError:
@@ -179,9 +216,18 @@ def run(params, client, check_mode, sleep=time.sleep):
                 wanted[name] = settings.ipv4(params[name], name)
         if params.get("dns_servers") is not None:
             wanted["dns_servers"] = [settings.ipv4(server, "DNS server") for server in params["dns_servers"]]
+            if "0.0.0.0" in wanted["dns_servers"]:
+                raise ExosModuleError("0.0.0.0 is not a DNS server; give an empty list to hand out the router itself")
+        pool_options = [name for name in ("pool_start", "pool_end", "lease_seconds", "dns_servers") if params.get(name) is not None]
+        if not wanted["enabled"] and pool_options:
+            raise ExosModuleError(
+                "the DHCP server is off, so %s cannot be set; give enabled=true as well" % ", ".join(pool_options)
+            )
         moves = (wanted["lan_address"], wanted["lan_netmask"]) != (before["lan_address"], before["lan_netmask"])
         if before != wanted:
             _check(wanted)
+            if moves:
+                _check_move(wanted, before)
             if moves and not params.get("force"):
                 raise ExosModuleError(
                     "changing lan_address or lan_netmask moves the router and cuts this connection; set force=true to do it"

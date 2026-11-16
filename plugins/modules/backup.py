@@ -95,9 +95,12 @@ def run(params, client, check_mode):
             if os.path.exists(temp):
                 os.unlink(temp)
             raise ExosModuleError("could not write %s: %s" % (dest, err)) from None
+    loose = same and bool(os.stat(dest).st_mode & 0o077)
+    if loose and not check_mode:
+        os.chmod(dest, 0o600)
     result = {"dest": str(params["dest"]), "size": len(data)}
     result.update(header)
-    return {"changed": not same, "backup": result}
+    return {"changed": not same or loose, "backup": result}
 
 
 def main():

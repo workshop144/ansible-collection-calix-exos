@@ -157,11 +157,17 @@
             security: wpa2
           register: sec_security
 
+        - name: Isolation off, nothing else given, keeps the security and the key
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            isolation: false
+          register: sec_isolation
+
         - name: The same key given again is still no change
           workshop144.calix_exos.wifi_secondary_network:
             <<: *exos
             ssid: "{{ live_ssid }}"
-            security: wpa2
             key: "{{ key_two }}"
           register: sec_same_key
 
@@ -179,7 +185,10 @@
               - sec_again is not changed
               - sec_rekey is changed and sec_rekey.key_changed
               - sec_security is changed and not sec_security.key_changed
+              - sec_isolation is changed and not sec_isolation.key_changed
+              - sec_isolation.network.security == 'wpa2' and not sec_isolation.network.isolation
               - sec_same_key is not changed
+              - sec_same_key.network.security == 'wpa2' and not sec_same_key.network.isolation
               - live_ssid in (sec_info.exos.wifi | map(attribute='ssid'))
       always:
         - name: Network removed
