@@ -1,0 +1,254 @@
+---
+# Live test of dhcp, wifi_radio, wifi_secondary_network and wifi_network.
+# THESE DISTURB THE NETWORK: the DHCP service and the radios restart, and Wi-Fi devices can drop
+# for some seconds each time. Everything is put back, also when a step fails.
+- name: DHCP and Wi-Fi modules against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exos: &exos
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+    live_ssid: exos-live-test
+    live_key_one: "{{ lookup('ansible.builtin.password', '/dev/null', length=20, chars=['ascii_letters', 'digits']) }}"
+    live_key_two: "{{ lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_letters', 'digits']) }}"
+    live_radio_band: "6"
+  tasks:
+    - name: The router to test must be named, with a password
+      ansible.builtin.assert:
+        that:
+          - exos_host is defined
+          - exos.password | length > 0
+
+    - name: Fix the two test keys for this run
+      ansible.builtin.set_fact:
+        key_one: "{{ live_key_one }}"
+        key_two: "{{ live_key_two }}"
+      no_log: true
+
+    # ------------------------------------------------------------------ dhcp
+    - name: DHCP settings as they are now
+      workshop144.calix_exos.dhcp:
+        <<: *exos
+        enabled: true
+      check_mode: true
+      register: dhcp_now
+
+    - name: DHCP round trip
+      block:
+        - name: Lease a minute longer
+          workshop144.calix_exos.dhcp:
+            <<: *exos
+            lease_seconds: "{{ dhcp_now.diff.before.lease_seconds + 60 }}"
+          register: dhcp_lease
+
+        - name: Same lease again changes nothing
+          workshop144.calix_exos.dhcp:
+            <<: *exos
+            lease_seconds: "{{ dhcp_now.diff.before.lease_seconds + 60 }}"
+          register: dhcp_again
+
+        - name: The info module sees the new lease, and nothing else moved
+          workshop144.calix_exos.info:
+            <<: *exos
+            gather_subset: [lan]
+          register: dhcp_info
+
+        - name: DHCP changed as expected
+          ansible.builtin.assert:
+            that:
+              - dhcp_lease is changed
+              - dhcp_again is not changed
+              - dhcp_info.exos.lan.lease_seconds == dhcp_now.diff.before.lease_seconds + 60
+              - dhcp_info.exos.lan.pool_start == dhcp_now.diff.before.pool_start
+              - dhcp_info.exos.lan.pool_end == dhcp_now.diff.before.pool_end
+              - dhcp_info.exos.lan.address == dhcp_now.diff.before.lan_address
+              - dhcp_lease.dhcp.dns_servers == dhcp_now.diff.before.dns_servers
+              - dhcp_lease.dhcp.hostname == dhcp_now.diff.before.hostname
+      always:
+        - name: Lease back as it was
+          workshop144.calix_exos.dhcp:
+            <<: *exos
+            lease_seconds: "{{ dhcp_now.diff.before.lease_seconds }}"
+          register: dhcp_back
+
+    - name: DHCP was restored by a real change
+      ansible.builtin.assert:
+        that: dhcp_back is changed and dhcp_back.dhcp == dhcp_now.diff.before
+
+    # ------------------------------------------------------------------ wifi_radio
+    - name: The radio as it is now
+      workshop144.calix_exos.wifi_radio:
+        <<: *exos
+        band: "{{ live_radio_band }}"
+        enabled: true
+      check_mode: true
+      register: radio_now
+
+    - name: Radio round trip
+      block:
+        - name: MU-MIMO flipped
+          workshop144.calix_exos.wifi_radio:
+            <<: *exos
+            band: "{{ live_radio_band }}"
+            mu_mimo: "{{ not radio_now.diff.before.mu_mimo }}"
+          register: radio_flip
+
+        - name: MU-MIMO flipped again changes nothing
+          workshop144.calix_exos.wifi_radio:
+            <<: *exos
+            band: "{{ live_radio_band }}"
+            mu_mimo: "{{ not radio_now.diff.before.mu_mimo }}"
+          register: radio_again
+
+        - name: Radio changed once, and only in that setting
+          ansible.builtin.assert:
+            that:
+              - radio_flip is changed
+              - radio_again is not changed
+              - radio_flip.radio.enabled == radio_now.diff.before.enabled
+      always:
+        - name: Radio back as it was
+          workshop144.calix_exos.wifi_radio:
+            <<: *exos
+            band: "{{ live_radio_band }}"
+            mu_mimo: "{{ radio_now.diff.before.mu_mimo }}"
+          register: radio_back
+
+    - name: Radio was restored by a real change
+      ansible.builtin.assert:
+        that: radio_back is changed and radio_back.radio == radio_now.diff.before
+
+    # ------------------------------------------------------------------ wifi_secondary_network
+    - name: Wi-Fi networks before
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [wifi]
+      register: wifi_before
+
+    - name: Secondary network round trip
+      block:
+        - name: Network created
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            key: "{{ key_one }}"
+          register: sec_add
+
+        - name: Network created again changes nothing
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            key: "{{ key_one }}"
+          register: sec_again
+
+        - name: Another key is a change
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            key: "{{ key_two }}"
+          register: sec_rekey
+
+        - name: Other security, no key given, keeps the key
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            security: wpa2
+          register: sec_security
+
+        - name: Isolation off, nothing else given, keeps the security and the key
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            isolation: false
+          register: sec_isolation
+
+        - name: The same key given again is still no change
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            key: "{{ key_two }}"
+          register: sec_same_key
+
+        - name: The info module sees the network
+          workshop144.calix_exos.info:
+            <<: *exos
+            gather_subset: [wifi]
+          register: sec_info
+
+        - name: Secondary network changed as expected
+          ansible.builtin.assert:
+            that:
+              - sec_add is changed and sec_add.key_changed
+              - sec_add.network.kind == 'guest' and sec_add.network.isolation
+              - sec_again is not changed
+              - sec_rekey is changed and sec_rekey.key_changed
+              - sec_security is changed and not sec_security.key_changed
+              - sec_isolation is changed and not sec_isolation.key_changed
+              - sec_isolation.network.security == 'wpa2' and not sec_isolation.network.isolation
+              - sec_same_key is not changed
+              - sec_same_key.network.security == 'wpa2' and not sec_same_key.network.isolation
+              - live_ssid in (sec_info.exos.wifi | map(attribute='ssid'))
+      always:
+        - name: Network removed
+          workshop144.calix_exos.wifi_secondary_network:
+            <<: *exos
+            ssid: "{{ live_ssid }}"
+            state: absent
+          register: sec_remove
+
+    - name: Wi-Fi networks after
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [wifi]
+      register: wifi_after
+
+    - name: Secondary network was removed and the others are as they were
+      ansible.builtin.assert:
+        that:
+          - sec_remove is changed and sec_remove.network is none
+          - wifi_after.exos.wifi == wifi_before.exos.wifi
+
+    # ------------------------------------------------------------------ wifi_network
+    - name: Primary network as it is now
+      workshop144.calix_exos.wifi_network:
+        <<: *exos
+        hidden: false
+      check_mode: true
+      register: pri_now
+
+    - name: Primary network round trip, on its hidden flag only
+      block:
+        - name: Hidden flag flipped
+          workshop144.calix_exos.wifi_network:
+            <<: *exos
+            hidden: "{{ not pri_now.diff.before.hidden }}"
+          register: pri_flip
+
+        - name: Hidden flag flipped again changes nothing
+          workshop144.calix_exos.wifi_network:
+            <<: *exos
+            hidden: "{{ not pri_now.diff.before.hidden }}"
+          register: pri_again
+
+        - name: Primary network changed once, key and name untouched
+          ansible.builtin.assert:
+            that:
+              - pri_flip is changed and not pri_flip.key_changed
+              - pri_again is not changed
+              - pri_flip.network.ssid == pri_now.diff.before.ssid
+              - pri_flip.network.security == pri_now.diff.before.security
+      always:
+        - name: Hidden flag back as it was
+          workshop144.calix_exos.wifi_network:
+            <<: *exos
+            hidden: "{{ pri_now.diff.before.hidden }}"
+          register: pri_back
+
+    - name: Primary network was restored by a real change
+      ansible.builtin.assert:
+        that:
+          - pri_back is changed and not pri_back.key_changed
+          - pri_back.network == pri_now.diff.before
+        success_msg: "DHCP and Wi-Fi modules passed on {{ exos_host }}."

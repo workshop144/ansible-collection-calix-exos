@@ -1,2 +1,27 @@
 ---
 requires_ansible: ">=2.17.0"
+action_groups:
+  all:
+    - access_schedule
+    - arp_spoofing
+    - backup
+    - controls
+    - device
+    - dhcp
+    - dhcp_reservation
+    - dmz
+    - dns_host_mapping
+    - firewall
+    - firewall_rule
+    - info
+    - ipv6_lan
+    - ping
+    - port_forward
+    - reboot
+    - service_blocking
+    - service_blocking_rule
+    - traceroute
+    - upnp
+    - wifi_network
+    - wifi_radio
+    - wifi_secondary_network

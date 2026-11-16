@@ -83,7 +83,7 @@ def test_security_types():
 
 
 def test_security_on_values():
-    out = normalize.security(dict(replies.SECURITY_PARAMS, enblUpnp="1", dmzHost="192.0.2.50"), None, [{"a": 1}])
+    out = normalize.security(dict(replies.SECURITY_PARAMS, enblUpnp="1", dmzHost="1|192.0.2.50"), None, [{"a": 1}])
     assert out["upnp"] is True
     assert out["dmz_host"] == "192.0.2.50"
     assert out["port_forwards"] == [{"a": 1}]

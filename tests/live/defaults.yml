@@ -1,0 +1,28 @@
+---
+# Read-only: the module_defaults group saves repeating host and password.
+- name: The module_defaults group against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  module_defaults:
+    group/workshop144.calix_exos.all:
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+  tasks:
+    - name: Read the system subset with no connection options on the task
+      workshop144.calix_exos.info:  # noqa: args[module]
+        gather_subset: [system]
+      register: grouped
+
+    - name: UPnP in check mode, the same way
+      workshop144.calix_exos.upnp:  # noqa: args[module]
+        enabled: false
+      check_mode: true
+      register: grouped_upnp
+
+    - name: Both tasks reached the router
+      ansible.builtin.assert:
+        that:
+          - grouped.exos.system.model | length > 0
+          - grouped_upnp.upnp.enabled is false
+        success_msg: "The module_defaults group works on {{ exos_host }}."

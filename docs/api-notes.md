@@ -86,3 +86,53 @@ The default pool is called `lan`. MAC addresses come back lower-case and colon-s
   page has no switch to turn it off.
 - Many routers of this kind are managed remotely by the internet provider, which can change
   settings independently of anything done through the local interface.
+
+## More of the interface (0.2.0)
+
+Two request formats. Most endpoints take form fields. These take a JSON body with
+`Content-Type: application/json`: `advanced_controls.cmd`, `arp_spoof.cmd`, `advfw_load.cmd`,
+`advfw_apply.cmd`, `ddnsmngr.cmd`, `lan_setting_ipv6.cmd`, `xlan.cmd`, `detail_access.cmd`,
+`wireless_radiosetup.wl`, `wps.cmd`.
+
+Some replies are plain text, not JSON: `portForwardingAssociations.cmd` (records joined by `|`,
+seven comma-separated fields each), `serviceBlockingRules.cmd` (`name,isCustom,entries`, entries
+joined by `;`, each `PROTO:start:end:1`), `serviceBlockingAssociations.cmd` (`ip,rule`).
+
+Secrets. A Wi-Fi key (and a dynamic DNS password) is sent and returned encrypted: each character
+is XORed with the bytes of `sha256("<a>:<nonce>:<b>")` in turn and written as two hex digits.
+For a Wi-Fi key `a` is the network name and `b` its security mode as the router spells it; the
+nonce for a write comes from `get_nonce.cmd` and is sent along as `nonce`, and a read returns
+the nonce it used in the row. This is obfuscation, not protection: anyone who can log in can
+read the keys.
+
+| Setting | Read | Write |
+|---|---|---|
+| UPnP | `cgi_parameter_value.cmd` `enblUpnp`, `enblUpnpnat` | `advanced_security_upnp.cgi` `enblUpnp`, `enblUpnpnat` (0/1) |
+| Firewall level | `fwLevel` (`Basic`, `Low`, `Medium`, `High`), `fwStealthMode` | `advanced_firewallsettings.cmd` with `currentPage`, `fwLevel`, `fwStealthMode` and `firewallInfo`: the whole per-service table for the level |
+| Custom firewall rules | `advfw_load.cmd` `["dsv4"]` (also `usv4`, `dsv6`, `usv6`) | `advfw_apply.cmd` `{"<chain>": [rules]}`: replaces the chain |
+| DMZ host | `dmzHost` by `ejGetOtherVal`: `0|` or `1|<host>` | `scdmz.cmd` `action=add|remove`, `address` |
+| Port forwards | `portForwardingAssociations.cmd` `readall` | `advancedPortForwarding.cmd` `add|remove` with `protocol`, `localIpAddress`, `localPortStart`, `localPortEnd`, `remoteIpAddress`, `remotePortStart`, `remotePortEnd` |
+| DNS names | `dns_host_mapping.cmd` `loadTableData`: `[{ip, dns}]` | `add|del` with `hostName`, `ip`. The DNS service takes a few seconds to answer with a new name |
+| ARP spoofing | `arp_spoof.cmd` `{"action":"get"}`: `{admin}` | `{"action":"set","admin":"1"|"0"}` |
+| LED, SIP ALG | `advanced_controls.cmd` `{"action":"get","type":"all"}` | `{"action":"set","sip":0|1}`, `{"action":"set","led":0|1,"brightness":0-100}` |
+| Devices | `device_table.cmd` `get` | `set` with `version=ipv4`, `mac`, `type`, `deviceName` |
+| Access schedules | `scheduleAccessList` by `ejGetOtherVal`: `id/mac/days/start/end` joined by `|` | `detail_access.cmd` `{"action":"add","mac","username":<id>,"days":"Mon,Sat","start_time","end_time"}`, `{"action":"remove","username":<id>}` |
+| Service blocking | `serviceBlockingRules.cmd`, `serviceBlockingAssociations.cmd` `readall` | `serviceBlockingRule.cmd` `add|remove` (`ruleName`, `protocol` `tcp|udp|tcpudp`, `portStart`, `portEnd`, `isCustom=1`), `serviceBlockingAssociation.cmd` `add|remove` (`ruleName`, `ipAddress`) |
+| IPv6 on the LAN | `lan_setting_ipv6.cmd` `{"action":"load"}` | the same object back with `action=apply` |
+| DHCP and LAN | `cgi_parameter_value.cmd` (see the names in `plugins/module_utils/settings.py`) | `dhcpcfg.cmd`, every field of the page at once |
+| Radios | `wlinfo.cmd` `get_radio_setup` | `wireless_radiosetup.wl`: a JSON array, one object per band in the order 2.4, 5, 6 GHz, flags as `"1"`/`"0"` |
+| Wi-Fi networks | `wlinfo.cmd` `get_ssid_setup` with `wlSsidUsage=primary|guest`, `get_pool_status` | `wireless_multiplessid.wl`. Primary: `wlSsidIdx`, `wlAuthMode`, `wlHidden`, `wlSsidSuffix=0`, `wlSsid`, `wlWpaPsk`, `nonce`. Secondary: the row plus `actiondo` (1 create, 2 edit, 0 remove) and `oldname` |
+| Ping, traceroute | `ping_test.cmd`, `traceroute.cmd` `status` | `start_ping` / `trace`, then poll |
+| Backup | GET `backupsettings.conf` | not covered |
+| Reboot | | POST `rebootinfo.cgi` with no fields; `login_nonce.cmd` answers again after about a minute and a half |
+
+Pauses. After a change that touches the firewall (a DMZ host, a port forward, a blocked
+service), the web server stops answering for around 13 seconds, measured on a GS4227. A change
+sent in that window can also be answered `#ERROR_018` (Internal Error) and then work when sent
+again.
+
+Parental control pages are refused unless `apps_status.cmd` reports `scheduleType` `ewi`, and
+website blocking is refused while the provider's security app runs.
+
+The admin page's own text for each `#ERROR_nnn` code is in `plugins/module_utils/errors.py`.
+

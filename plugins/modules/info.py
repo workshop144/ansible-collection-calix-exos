@@ -23,7 +23,9 @@ options:
       - Which parts of the state to read. V(all) reads everything.
     type: list
     elements: str
-    choices: [all, system, lan, dhcp_reservations, clients, wifi, security, wan]
+    choices: [all, system, lan, dhcp, dhcp_reservations, clients, ports, wifi, radios, security, firewall_rules,
+              dns_host_mappings, ddns, arp_spoofing, controls, ipv6_lan, access_schedules, service_blocking, wan,
+              internet]
     default: [all]
 extends_documentation_fragment:
   - workshop144.calix_exos.connection
@@ -100,7 +102,10 @@ exos:
                 "security": "psk-mixed+aes", "wps": true, "wps_type": "PushButton", "isolation": false,
                 "network_type": null, "gateway": null}]
     security:
-      description: UPnP, firewall, DMZ and port forwarding state.
+      description:
+        - UPnP, firewall, DMZ and port forwarding state.
+        - Each entry of C(port_forwards) has the keys the M(workshop144.calix_exos.port_forward)
+          module returns.
       type: dict
       sample: {"upnp": false, "upnp_nat": false, "firewall_level": "High", "stealth_mode": true,
                "dmz_host": null, "port_forwards": []}
@@ -114,11 +119,60 @@ exos:
       description: WAN connection status as the router reports it.
       type: dict
       sample: {"wan": {"state": 2, "color": "green"}, "ipv4": {"state": 2, "color": "green"}}
+    dhcp:
+      description: The DHCP server and LAN address, as the M(workshop144.calix_exos.dhcp) module returns them.
+      type: dict
+    ports:
+      description: The Ethernet ports and whether each has a link.
+      type: list
+      elements: dict
+      sample: [{"port": 1, "type": "Ethernet", "rate": "1000M", "connected": true}]
+    radios:
+      description: The Wi-Fi radios, each as the M(workshop144.calix_exos.wifi_radio) module returns it.
+      type: list
+      elements: dict
+    firewall_rules:
+      description:
+        - Custom firewall rules by chain (C(ipv4_in), C(ipv4_out), C(ipv6_in), C(ipv6_out)), in match order, each as
+          the M(workshop144.calix_exos.firewall_rule) module returns it.
+      type: dict
+    dns_host_mappings:
+      description: Local DNS names, each with C(hostname) and C(ip).
+      type: list
+      elements: dict
+    ddns:
+      description: The dynamic DNS client for C(ipv4) and C(ipv6). The password is never returned.
+      type: dict
+      sample: {"ipv4": {"enabled": false, "server": null, "user": null, "hostname": null, "ip_source": null,
+                        "website": null}}
+    arp_spoofing:
+      description: Whether ARP spoofing protection is on.
+      type: bool
+    controls:
+      description: LED and SIP ALG, as the M(workshop144.calix_exos.controls) module returns them.
+      type: dict
+    ipv6_lan:
+      description: IPv6 on the LAN, as the M(workshop144.calix_exos.ipv6_lan) module returns it.
+      type: dict
+    access_schedules:
+      description: Times at which devices are cut off from the internet. No days means always.
+      type: list
+      elements: dict
+      sample: [{"mac": "02:00:00:00:00:aa", "days": ["mon", "sat"], "start": "22:00", "end": "23:30"}]
+    service_blocking:
+      description: The services that can be blocked (C(rules)) and which device each is blocked for (C(blocked)).
+      type: dict
+    internet:
+      description:
+        - The Status > Internet page, in sections C(status), C(settings), C(ipv4) and C(ipv6). Keys are the page's
+          own labels in lower case with underscores.
+      type: dict
+      sample: {"ipv4": {"device_ipv4_address": "198.51.100.20"}}
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.workshop144.calix_exos.plugins.module_utils import normalize
+from ansible_collections.workshop144.calix_exos.plugins.module_utils import normalize, settings, wifi
 from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import (
     EXOS_ARGUMENT_SPEC,
     ExosError,
@@ -160,16 +214,56 @@ def _security(client):
     params = client.call("cgi_parameter_value.cmd", action="get", ejGetVal=SECURITY_PARAMS)
     other = client.call("cgi_parameter_value.cmd", action="get", ejGetOtherVal=SECURITY_OTHER_PARAMS)
     params = dict(params if isinstance(params, dict) else {}, **(other if isinstance(other, dict) else {}))
-    dmz = client.call("scdmz.cmd", action="get")
-    forwards = client.call("portForwardingAssociations.cmd", action="readall")
-    return normalize.security(params, dmz, forwards)
+    forwards = [settings.public_rule(rule) for rule in settings.read_port_forwards(client)]
+    return normalize.security(params, None, forwards)
 
 
 def _wan(client):
     return normalize.wan(client.call("status_connection.cmd", action="getStatus"))
 
 
+def _dhcp(client):
+    return settings.public_dhcp(settings.params(client, names=settings.DHCP_NAMES))
+
+
+def _firewall_rules(client):
+    return {
+        chain: [settings.public_firewall_rule(chain, raw) for raw in settings.read_chain(client, chain)]
+        for chain in settings.CHAINS
+    }
+
+
+def _access_schedules(client):
+    return [{key: value for key, value in entry.items() if not key.startswith("_")}
+            for entry in settings.read_access_schedules(client)]
+
+
+def _service_blocking(client):
+    rules = settings.read_service_rules(client)
+    return {"rules": [rules[name] for name in sorted(rules)], "blocked": settings.read_service_blocks(client)}
+
+
+def _radios(client):
+    return [wifi.public_radio(raw) for raw in wifi.radios(client)]
+
+
+def _ipv6_lan(client):
+    return settings.public_ipv6_lan(settings.read_ipv6_lan_raw(client))
+
+
 READERS = {
+    "dhcp": _dhcp,
+    "ports": settings.read_ports,
+    "radios": _radios,
+    "firewall_rules": _firewall_rules,
+    "dns_host_mappings": settings.read_dns_mappings,
+    "ddns": settings.read_ddns,
+    "arp_spoofing": settings.read_arp_spoofing,
+    "controls": settings.read_controls,
+    "ipv6_lan": _ipv6_lan,
+    "access_schedules": _access_schedules,
+    "service_blocking": _service_blocking,
+    "internet": settings.read_internet,
     "system": _system,
     "lan": _lan,
     "dhcp_reservations": _dhcp_reservations,

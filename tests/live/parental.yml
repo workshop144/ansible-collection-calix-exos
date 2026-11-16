@@ -1,0 +1,207 @@
+---
+# Live test of access_schedule, service_blocking_rule, service_blocking and ipv6_lan.
+# Everything is removed or put back, also when a step fails.
+- name: Parental control and IPv6 LAN modules against a real Calix EXOS router
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exos: &exos
+      host: "{{ exos_host }}"
+      password: "{{ lookup('ansible.builtin.env', 'CALIX_EXOS_PASSWORD') }}"
+    live_mac: "02:00:00:00:00:01"
+    live_service: exos-test
+  tasks:
+    - name: The router to test must be named, with a password
+      ansible.builtin.assert:
+        that:
+          - exos_host is defined
+          - exos.password | length > 0
+
+    - name: Read the router
+      workshop144.calix_exos.info:
+        <<: *exos
+        gather_subset: [lan, clients, dhcp_reservations]
+      register: live_info
+
+    - name: Pick an address in the pool that nothing uses
+      ansible.builtin.set_fact:
+        live_ip: "{{ live_candidates | reject('in', live_used) | last }}"
+      vars:
+        live_prefix: "{{ live_info.exos.lan.pool_end.split('.')[:3] | join('.') }}"
+        live_low: "{{ live_info.exos.lan.pool_start.split('.')[3] | int }}"
+        live_high: "{{ live_info.exos.lan.pool_end.split('.')[3] | int }}"
+        live_candidates: "{{ range(live_low | int, (live_high | int) + 1) | map('string') | map('regex_replace', '^', live_prefix ~ '.') | list }}"
+        live_used: "{{ (live_info.exos.clients | map(attribute='ip') | list) + (live_info.exos.dhcp_reservations | map(attribute='ip') | list) }}"
+
+    # ------------------------------------------------------------------ access_schedule
+    - name: Access schedule round trip, for a made-up device
+      block:
+        - name: Schedule added
+          workshop144.calix_exos.access_schedule:
+            <<: *exos
+            mac: "{{ live_mac }}"
+            days: [sat, mon]
+            start: "01:00"
+            end: "02:30"
+          register: sched_add
+
+        - name: Schedule added again changes nothing
+          workshop144.calix_exos.access_schedule:
+            <<: *exos
+            mac: "{{ live_mac }}"
+            days: [mon, sat]
+            start: "01:00"
+            end: "02:30"
+          register: sched_again
+
+        - name: Schedule added once
+          ansible.builtin.assert:
+            that: sched_add is changed and sched_again is not changed
+      always:
+        - name: Schedule removed
+          workshop144.calix_exos.access_schedule:
+            <<: *exos
+            mac: "{{ live_mac }}"
+            days: [mon, sat]
+            start: "01:00"
+            end: "02:30"
+            state: absent
+          register: sched_remove
+
+    - name: Schedule removed again changes nothing
+      workshop144.calix_exos.access_schedule:
+        <<: *exos
+        mac: "{{ live_mac }}"
+        days: [mon, sat]
+        start: "01:00"
+        end: "02:30"
+        state: absent
+      register: sched_gone
+
+    - name: Schedule was removed by a real change
+      ansible.builtin.assert:
+        that: sched_remove is changed and sched_gone is not changed
+
+    # ------------------------------------------------------------------ service blocking
+    - name: Service blocking round trip, for an address nothing uses
+      block:
+        - name: Service made
+          workshop144.calix_exos.service_blocking_rule:
+            <<: *exos
+            name: "{{ live_service }}"
+            ports:
+              - {protocol: tcp, port: 9}
+              - {protocol: both, port: 47990, port_end: 47995}
+          register: svc_add
+
+        - name: Service made again changes nothing
+          workshop144.calix_exos.service_blocking_rule:
+            <<: *exos
+            name: "{{ live_service }}"
+            ports:
+              - {protocol: both, port: 47990, port_end: 47995}
+              - {protocol: tcp, port: 9}
+          register: svc_again
+
+        - name: Service changed to one port
+          workshop144.calix_exos.service_blocking_rule:
+            <<: *exos
+            name: "{{ live_service }}"
+            ports:
+              - {protocol: udp, port: 9}
+          register: svc_change
+
+        - name: Service blocked for the address
+          workshop144.calix_exos.service_blocking:
+            <<: *exos
+            ip: "{{ live_ip }}"
+            rule: "{{ live_service }}"
+          register: block_add
+
+        - name: Blocked again changes nothing
+          workshop144.calix_exos.service_blocking:
+            <<: *exos
+            ip: "{{ live_ip }}"
+            rule: "{{ live_service }}"
+          register: block_again
+
+        - name: Service blocking changed as expected
+          ansible.builtin.assert:
+            that:
+              - svc_add is changed
+              - svc_again is not changed
+              - svc_change is changed
+              - svc_change.rule.ports | length == 1
+              - svc_change.rule.ports[0].protocol == 'udp' and svc_change.rule.ports[0].port == 9
+              - block_add is changed
+              - block_again is not changed
+      always:
+        - name: Block removed
+          workshop144.calix_exos.service_blocking:
+            <<: *exos
+            ip: "{{ live_ip }}"
+            rule: "{{ live_service }}"
+            state: absent
+          register: block_remove
+
+        - name: Service removed
+          workshop144.calix_exos.service_blocking_rule:
+            <<: *exos
+            name: "{{ live_service }}"
+            state: absent
+          register: svc_remove
+
+    - name: Service blocking was removed by real changes
+      ansible.builtin.assert:
+        that: block_remove is changed and svc_remove is changed and svc_remove.rule is none
+
+    # ------------------------------------------------------------------ ipv6_lan
+    - name: IPv6 LAN settings as they are now
+      workshop144.calix_exos.ipv6_lan:
+        <<: *exos
+        dhcpv6_mode: both
+      check_mode: true
+      register: v6_now
+
+    - name: IPv6 LAN round trip
+      block:
+        - name: Another DHCPv6 mode
+          workshop144.calix_exos.ipv6_lan:
+            <<: *exos
+            dhcpv6_mode: "{{ 'stateless' if v6_now.diff.before.dhcpv6_mode != 'stateless' else 'both' }}"
+          register: v6_mode
+
+        - name: Same mode again changes nothing
+          workshop144.calix_exos.ipv6_lan:
+            <<: *exos
+            dhcpv6_mode: "{{ v6_mode.ipv6_lan.dhcpv6_mode }}"
+          register: v6_again
+
+        - name: Our own DNS servers
+          workshop144.calix_exos.ipv6_lan:
+            <<: *exos
+            dns_servers: ["2001:db8::53", "2001:db8::54"]
+          register: v6_dns
+
+        - name: IPv6 LAN changed as expected
+          ansible.builtin.assert:
+            that:
+              - v6_mode is changed
+              - v6_again is not changed
+              - v6_dns is changed
+              - v6_dns.ipv6_lan.dns_servers == ['2001:db8::53', '2001:db8::54']
+      always:
+        - name: IPv6 LAN settings back as they were
+          workshop144.calix_exos.ipv6_lan:
+            <<: *exos
+            router_advertisement: "{{ v6_now.diff.before.router_advertisement }}"
+            dhcpv6: "{{ v6_now.diff.before.dhcpv6 }}"
+            dhcpv6_mode: "{{ v6_now.diff.before.dhcpv6_mode }}"
+            dns_servers: "{{ v6_now.diff.before.dns_servers }}"
+          register: v6_back
+
+    - name: IPv6 LAN was restored by a real change
+      ansible.builtin.assert:
+        that: v6_back is changed and v6_back.ipv6_lan == v6_now.diff.before
+        success_msg: "Parental control and IPv6 LAN modules passed on {{ exos_host }}."

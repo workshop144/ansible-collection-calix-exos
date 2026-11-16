@@ -90,9 +90,13 @@ def test_garbage_body_raises_with_80_char_excerpt():
 
 def test_unreachable_raises_exoserror_naming_host():
     router = FakeRouter()
-    router.fail_next("login_nonce.cmd", None, URLError("timed out"))
+    for dummy in range(3):
+        router.fail_next("login_nonce.cmd", None, URLError("timed out"))
+    client = ExosClient(HOST, "admin", "pw", request=router)
+    client.retry_delay = 0
     with pytest.raises(ExosError) as err:
-        ExosClient(HOST, "admin", "pw", request=router).login()
+        client.login()
+    assert router.endpoints().count("login_nonce.cmd") == 3 and "login.cgi" not in router.endpoints()
     assert HOST in str(err.value)
     assert "login_nonce.cmd" in str(err.value)
 
@@ -181,3 +185,88 @@ def test_login_answered_200_without_a_session_cookie_is_a_refusal():
     assert router.endpoints().count("login.cgi") == 1
     assert "no session cookie" in str(err.value)
     assert "wrong" not in str(err.value)
+
+
+def test_call_json_sends_a_json_body_and_parses_the_reply():
+    router = FakeRouter()
+    router.handlers["arp_spoof.cmd"] = lambda r, action, params: {"admin": "0", "echo": params}
+    reply = logged_in(router).call_json("arp_spoof.cmd", {"action": "get"})
+    assert reply == {"admin": "0", "echo": {"action": "get"}}
+    assert router.json_calls == ["arp_spoof.cmd"]
+
+
+def test_call_json_accepts_a_list_body():
+    router = FakeRouter()
+    router.handlers["advfw_load.cmd"] = lambda r, action, params: {params[0]: []}
+    assert logged_in(router).call_json("advfw_load.cmd", ["dsv4"]) == {"dsv4": []}
+
+
+def test_call_json_error_reply_raises():
+    router = FakeRouter()
+    router.handlers["arp_spoof.cmd"] = lambda r, action, params: "#ERROR_019"
+    with pytest.raises(ExosError) as err:
+        logged_in(router).call_json("arp_spoof.cmd", {"action": "set"})
+    assert err.value.code == "019" and err.value.action == "set"
+
+
+def test_call_text_returns_the_raw_reply():
+    router = FakeRouter(replies={("portForwardingAssociations.cmd", "readall"): "TCP,192.0.2.5,80,80,0.0.0.0,8080,8080"})
+    assert logged_in(router).call_text("portForwardingAssociations.cmd", action="readall").startswith("TCP,192.0.2.5")
+
+
+def test_call_text_empty_reply_is_an_empty_string():
+    assert logged_in(FakeRouter()).call_text("x.cmd", action="readall") == ""
+
+
+def test_call_text_still_raises_on_error_and_login_page():
+    router = FakeRouter(replies={("x.cmd", "a"): "#ERROR_060", ("x.cmd", "b"): LOGIN_PAGE})
+    client = logged_in(router)
+    with pytest.raises(ExosError):
+        client.call_text("x.cmd", action="a")
+    with pytest.raises(ExosError):
+        client.call_text("x.cmd", action="b")
+
+
+def test_error_message_carries_the_routers_own_wording():
+    router = FakeRouter(replies={("x.cmd", "get"): "#ERROR_540"})
+    with pytest.raises(ExosError) as err:
+        logged_in(router).call("x.cmd", action="get")
+    assert "Bridge mode can not use UPnP" in str(err.value)
+    assert err.value.meaning == "Bridge mode can not use UPnP!"
+
+
+def test_error_without_a_known_meaning_has_none():
+    router = FakeRouter(replies={("x.cmd", "get"): "#ERROR_999"})
+    with pytest.raises(ExosError) as err:
+        logged_in(router).call("x.cmd", action="get")
+    assert err.value.meaning is None and "#ERROR_999" in str(err.value)
+
+
+def test_encrypt_secret_matches_the_admin_pages_algorithm():
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import encrypt_secret
+    key = hashlib.sha256(b"example:abc123:psk2").digest()
+    expected = "".join("%02x" % (key[i % 32] ^ ord(c)) for i, c in enumerate("correct horse battery staple, forty chars"))
+    assert encrypt_secret("correct horse battery staple, forty chars", "example", "abc123", "psk2") == expected
+    assert len(expected) == 2 * 41
+
+
+def test_encrypt_secret_rejects_non_ascii():
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import encrypt_secret
+    with pytest.raises(ValueError):
+        encrypt_secret("pässword", "a", "b", "c")
+
+
+def test_login_waits_out_a_router_that_is_briefly_not_answering():
+    # Seen live: the web server stops answering for about 13 seconds after some changes.
+    router = FakeRouter()
+    router.fail_next("login_nonce.cmd", None, TimeoutError("timed out"))
+    router.fail_next("login_nonce.cmd", None, TimeoutError("timed out"))
+    client = ExosClient(HOST, "admin", "pw", request=router)
+    client.retry_delay = 0
+    client.login()
+    assert router.logged_in and router.endpoints().count("login.cgi") == 1
+
+
+def test_default_timeout_outlasts_the_routers_pause():
+    from ansible_collections.workshop144.calix_exos.plugins.module_utils.client import EXOS_ARGUMENT_SPEC
+    assert EXOS_ARGUMENT_SPEC["timeout"]["default"] == 30

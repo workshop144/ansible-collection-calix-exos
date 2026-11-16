@@ -20,7 +20,7 @@ class FakeResponse:
         self._body = body
 
     def read(self):
-        return self._body.encode("utf-8")
+        return self._body if isinstance(self._body, bytes) else self._body.encode("utf-8")
 
 
 class FakeCookie:
@@ -40,6 +40,10 @@ class FakeRouter:
         self.leases = [dict(x) for x in (leases or [])]
         self.replies = dict(replies or {})
         self.calls = []
+        self.json_calls = []   # endpoints that were sent a JSON body
+        self.handlers = {}     # endpoint -> callable(router, action, params) returning str, dict or list
+        self.state = {}        # free-form state for handlers
+        self.files = {}        # path -> bytes, for downloads
         self.logged_in = False
         self.drop_writes = False
         self.refuse_silently = False  # answer a wrong password with HTTP 200 and no cookie
@@ -61,13 +65,25 @@ class FakeRouter:
     def endpoints(self):
         return [c[0] for c in self.calls]
 
+    def get(self, url, headers=None):
+        """A plain download. ``files`` maps a path to its bytes; anything else is the login page."""
+        path = urlparse(url).path.lstrip("/")
+        self.calls.append(("GET " + path, {}))
+        if not self.logged_in or path not in self.files:
+            return FakeResponse(LOGIN_PAGE)
+        return FakeResponse(self.files[path])
+
     def post(self, url, data=None, headers=None):
         endpoint = urlparse(url).path.lstrip("/")
         if isinstance(data, bytes):
             data = data.decode("utf-8")
-        params = dict(parse_qsl(data or "", keep_blank_values=True))
+        if "json" in (headers or {}).get("Content-Type", ""):
+            params = json.loads(data or "null")
+            self.json_calls.append(endpoint)
+        else:
+            params = dict(parse_qsl(data or "", keep_blank_values=True))
         self.calls.append((endpoint, params))
-        action = params.get("action")
+        action = params.get("action") if isinstance(params, dict) else None
 
         queued = self._failures.get((endpoint, action))
         if queued:
@@ -80,6 +96,9 @@ class FakeRouter:
         return FakeResponse(self._dispatch(url, endpoint, action, params))
 
     def _dispatch(self, url, endpoint, action, params):
+        if endpoint == "login_nonce.cmd" and self.state.get("down_for", 0) > 0:
+            self.state["down_for"] -= 1
+            raise OSError("connection refused")
         if endpoint == "login_nonce.cmd":
             self._nonce_count += 1
             self._nonce = hashlib.sha256(str(self._nonce_count).encode()).hexdigest()
@@ -103,6 +122,9 @@ class FakeRouter:
             return ""
         if not self.logged_in:
             return LOGIN_PAGE
+        if endpoint in self.handlers:
+            reply = self.handlers[endpoint](self, action, params)
+            return reply if isinstance(reply, str) else json.dumps(reply)
         if endpoint == "dhcp_reservation.cmd" and action == "init":
             return json.dumps({
                 "networks": [{"network": "Primary", "dhcpPool": "lan", "dhcpEnbled": "1",

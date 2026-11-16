@@ -33,8 +33,10 @@ options:
   timeout:
     description:
       - Seconds to wait for each request.
+      - The router's web server can stop answering for around 15 seconds while it applies some
+        changes, so a much shorter value makes tasks fail now and then.
     type: int
-    default: 15
+    default: 30
 notes:
   - Unofficial. Not affiliated with or endorsed by Calix. Tested on the GS4227 and GS4227W with
     EXOS 25.4.0; a firmware update may break it.
